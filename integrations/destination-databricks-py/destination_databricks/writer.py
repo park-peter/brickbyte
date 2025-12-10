@@ -3,7 +3,6 @@ import logging
 from collections import defaultdict
 from datetime import datetime
 
-from airbyte_cdk.models import AirbyteConnectionStatus, Status
 from destination_databricks.client import DatabricksSqlClient
 
 
@@ -17,16 +16,11 @@ class DatabricksSqlWriter:
     def __init__(self, client: DatabricksSqlClient) -> None:
         """
         :param client: Databricks SDK connection class with established connection
-            to the databse.
+            to the database.
         """
-        try:
-            # open a cursor and do some work with it
-            self.client = client
-            self._buffer = defaultdict(list)
-            self._values = 0
-        except Exception as e:
-            # handle the exception
-            raise AirbyteConnectionStatus(status=Status.FAILED, message=f"An exception occurred: {repr(e)}")
+        self.client = client
+        self._buffer = defaultdict(list)
+        self._values = 0
 
     def delete_table(self, name: str) -> None:
         """

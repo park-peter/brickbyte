@@ -6,7 +6,7 @@ authors = [
     { name="Sri Tikkireddy", email="sri.tikkireddy@databricks.com" },
 ]
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 dependencies = []
 
 [project.license]
@@ -20,7 +20,7 @@ dev = [
 
 [tool.ruff]
 line-length = 100
-target-version = "py39"
+target-version = "py310"
 
 [tool.ruff.lint]
 select = [
