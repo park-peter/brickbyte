@@ -1,49 +1,10 @@
 # BrickByte 🧱
 
-**Bridge Airbyte's 600+ connectors directly into Databricks**
+**Sync data from Airbyte's 600+ connectors to Databricks in one line.**
 
-BrickByte enables you to leverage [Airbyte's](https://github.com/airbytehq/airbyte) extensive library of pre-built data connectors to extract data from virtually any source and land it directly into Databricks—all without leaving your Databricks environment.
-
-## Why BrickByte?
-
-Airbyte has done the hard work of building and maintaining [600+ connectors](https://docs.airbyte.com/integrations) for APIs, databases, files, and more. Instead of reinventing the wheel, BrickByte lets you:
-
-- **Use battle-tested connectors** — Tap into Airbyte's mature connector ecosystem
-- **Run entirely in Databricks** — No separate infrastructure needed
-- **Support incremental syncs** — Only pull new data with state management
-- **Land data in Unity Catalog** — Write directly to your Databricks tables
-- **Auto-authenticate** — Uses Databricks SDK to connect to current workspace automatically
-
-## How It Works
-
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                         Databricks Notebook                         │
-├─────────────────────────────────────────────────────────────────────┤
-│                                                                     │
-│  ┌───────────┐     ┌───────────┐     ┌──────────────────────────┐  │
-│  │  Airbyte  │────▶│ PyAirbyte │────▶│  BrickByte Destination   │  │
-│  │  Source   │     │   Cache   │     │     (Databricks SQL)     │  │
-│  │ Connector │     │           │     │                          │  │
-│  └───────────┘     └───────────┘     └────────────┬─────────────┘  │
-│       │                                           │                 │
-│       │                                           ▼                 │
-│       │                               ┌──────────────────────────┐  │
-│  - Salesforce                         │   Unity Catalog Tables   │  │
-│  - Stripe                             │   _airbyte_raw_<stream>  │  │
-│  - HubSpot                            └──────────────────────────┘  │
-│  - 600+ more...                                                     │
-│                                                                     │
-└─────────────────────────────────────────────────────────────────────┘
-```
-
-BrickByte manages isolated Python virtual environments for each connector to avoid dependency conflicts, then orchestrates data extraction via [PyAirbyte](https://github.com/airbytehq/airbyte) and loading into Databricks using a custom destination connector.
+BrickByte wraps [PyAirbyte](https://github.com/airbytehq/airbyte) to make it dead simple to extract data from any source and land it directly into Databricks Unity Catalog.
 
 ## Quick Start
-
-### 1. Install in Databricks
-
-Run the setup notebook or install manually:
 
 ```python
 %pip install airbyte
@@ -51,94 +12,108 @@ Run the setup notebook or install manually:
 dbutils.library.restartPython()
 ```
 
-### 2. Initialize BrickByte
-
 ```python
 from brickbyte import BrickByte
 
-bb = BrickByte(
-    sources=["source-faker"],
-    destination="destination-databricks",
-    destination_install="git+https://github.com/park-peter/brickbyte.git#subdirectory=integrations/destination-databricks-py"
-)
-bb.setup()
-```
+bb = BrickByte()
 
-### 3. Configure Source
-
-```python
-import airbyte as ab
-
-cache = bb.get_or_create_cache()
-
-source = ab.get_source(
-    "source-faker",
-    config={"count": 100},
-    local_executable=bb.get_source_exec_path("source-faker")
-)
-source.check()
-source.select_all_streams()
-```
-
-### 4. Run Sync
-
-```python
-# Uses current workspace credentials and auto-discovers a running warehouse
-destination = bb.get_databricks_destination(
-    catalog="your_catalog",
-    schema="your_schema",
-)
-
-write_result = destination.write(source, cache=cache, force_full_refresh=True)
-```
-
-### 5. Cleanup
-
-```python
-bb.cleanup()
-```
-
-## Destination Configuration
-
-The `get_databricks_destination` method automatically uses your current workspace credentials and discovers a running SQL warehouse when running in a Databricks notebook.
-
-```python
-# Simplest: auto-detect everything (warehouse, host, token)
-destination = bb.get_databricks_destination(
+bb.sync(
+    source="source-faker",
+    source_config={"count": 100},
     catalog="main",
     schema="bronze",
 )
+```
 
-# Specify a particular warehouse
-destination = bb.get_databricks_destination(
-    catalog="main",
-    schema="bronze",
-    warehouse_id="abc123def456",
-)
+That's it. BrickByte handles everything:
+- ✅ Installs source connector in isolated venv
+- ✅ Installs Databricks destination connector
+- ✅ Auto-discovers a running SQL warehouse
+- ✅ Auto-authenticates via Databricks SDK
+- ✅ Syncs data to Unity Catalog
+- ✅ Cleans up after itself
 
-# Connect to a different workspace
-destination = bb.get_databricks_destination(
+## Real-World Examples
+
+### GitHub
+
+```python
+bb.sync(
+    source="source-github",
+    source_config={
+        "credentials": {
+            "option_title": "PAT Credentials",
+            "personal_access_token": "ghp_...",
+        },
+        "repositories": ["owner/repo"],
+    },
     catalog="main",
-    schema="bronze",
-    warehouse_id="abc123def456",
-    local_workspace=False,
-    server_hostname="adb-xxx.azuredatabricks.net",
-    token="dapi..."
+    schema="raw_github",
+    streams=["commits", "issues", "pull_requests"],
 )
 ```
 
-| Parameter | Description | Required |
-|-----------|-------------|----------|
-| `catalog` | Unity Catalog name | ✅ |
-| `schema` | Target schema name | ✅ |
-| `warehouse_id` | SQL warehouse ID (auto-discovered if not provided) | |
-| `local_workspace` | Use current workspace credentials (default: `True`) | |
-| `server_hostname` | Databricks hostname (required if `local_workspace=False`) | |
-| `token` | Databricks PAT (required if `local_workspace=False`) | |
+### Confluence
+
+```python
+bb.sync(
+    source="source-confluence",
+    source_config={
+        "domain_name": "your-company.atlassian.net",
+        "email": "you@company.com",
+        "api_token": "...",
+    },
+    catalog="main",
+    schema="raw_confluence",
+)
+```
+
+### DataDog
+
+```python
+bb.sync(
+    source="source-datadog",
+    source_config={
+        "api_key": "...",
+        "application_key": "...",
+        "site": "datadoghq.com",
+        "start_date": "2024-01-01T00:00:00Z",
+        "end_date": "2024-12-31T23:59:59Z",
+    },
+    catalog="main",
+    schema="raw_datadog",
+)
+```
+
+## API Reference
+
+### `BrickByte()`
+
+```python
+bb = BrickByte(base_venv_directory="/tmp/brickbyte")  # Optional: custom venv location
+```
+
+### `bb.sync()`
+
+```python
+result = bb.sync(
+    source="source-github",           # Required: Airbyte source connector name
+    source_config={...},              # Required: Source configuration dict
+    catalog="main",                   # Required: Unity Catalog name
+    schema="bronze",                  # Required: Target schema name
+    streams=["commits", "issues"],    # Optional: List of streams (None = all)
+    warehouse_id="abc123",            # Optional: SQL warehouse ID (auto-discovered)
+    mode="full_refresh",              # Optional: "full_refresh" or "incremental"
+    cleanup=True,                     # Optional: Cleanup venvs after sync (default: True)
+)
+
+print(f"Synced {result.records_written} records")
+print(f"Streams: {result.streams_synced}")
+```
 
 ## Supported Sources
 
-BrickByte supports all [PyAirbyte-compatible sources](https://docs.airbyte.com/using-airbyte/pyairbyte/getting-started). Here are some popular ones:
+BrickByte supports all [600+ Airbyte connectors](https://docs.airbyte.com/integrations):
 
 | Category | Sources |
 |----------|---------|
@@ -153,97 +128,66 @@ BrickByte supports all [PyAirbyte-compatible sources](https://docs.airbyte.com/u
 | **E-commerce** | Shopify, Amazon Seller Partner |
 | **Dev Tools** | GitHub, GitLab, Sentry |
 
-[View all 600+ connectors →](https://docs.airbyte.com/integrations)
+## How It Works
 
-## Example Notebooks
-
-Example notebooks are available in the `notebooks/` directory:
-
-- `_setup.py` — Shared setup (install dependencies)
-- `brickbyte-example.py` — Basic example with source-faker
-- `brickbyte-confluence.py` — Sync from Atlassian Confluence
-- `brickbyte-github.py` — Sync from GitHub
-- `brickbyte-datadog.py` — Sync from DataDog
-
-These are Python files that Databricks reads as notebooks.
-
-## Sync Modes
-
-BrickByte supports:
-
-- **Full Refresh (Overwrite)** — Replaces all data in the destination table
-- **Full Refresh (Append)** — Appends all source data to the destination
-- **Incremental (Append)** — Only syncs new/updated records using state
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                         Databricks Notebook                         │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                     │
+│  bb.sync("source-github", {...}, "main", "bronze")                  │
+│       │                                                             │
+│       ▼                                                             │
+│  ┌───────────┐     ┌───────────┐     ┌──────────────────────────┐  │
+│  │  Airbyte  │────▶│ PyAirbyte │────▶│  Databricks Destination  │  │
+│  │  Source   │     │   Cache   │     │     (auto-configured)    │  │
+│  └───────────┘     └───────────┘     └────────────┬─────────────┘  │
+│                                                   │                 │
+│                                                   ▼                 │
+│                                       ┌──────────────────────────┐  │
+│                                       │   Unity Catalog Tables   │  │
+│                                       │   _airbyte_raw_<stream>  │  │
+│                                       └──────────────────────────┘  │
+│                                                                     │
+└─────────────────────────────────────────────────────────────────────┘
+```
 
 ## Data Format
 
-Data is landed in raw tables with the following schema:
+Data lands in raw tables with this schema:
 
 ```sql
 CREATE TABLE _airbyte_raw_<stream_name> (
-    _airbyte_ab_id STRING,        -- Unique record identifier
+    _airbyte_ab_id STRING,         -- Unique record identifier
     _airbyte_emitted_at TIMESTAMP, -- When the record was extracted
-    _airbyte_data STRING           -- JSON payload of the record
+    _airbyte_data STRING           -- JSON payload
 )
 ```
 
-You can then use Databricks SQL or dbt to transform raw data into your preferred schema.
+Use Databricks SQL or dbt to transform into your preferred schema.
 
-## Architecture
+## Sync Modes
 
-```
-brickbyte/
-├── src/brickbyte/
-│   ├── __init__.py      # BrickByte class & VirtualEnvManager
-│   ├── destination.py   # Databricks destination helper
-│   └── types.py         # Type definitions for sources & destinations
-├── integrations/
-│   └── destination-databricks-py/
-│       └── destination_databricks/
-│           ├── destination.py  # Airbyte destination implementation
-│           ├── writer.py       # SQL-based data writer
-│           └── client.py       # Databricks SQL client
-└── notebooks/
-    ├── _setup.py              # Shared setup notebook
-    ├── brickbyte-example.py   # Basic example
-    ├── brickbyte-confluence.py
-    ├── brickbyte-github.py
-    └── brickbyte-datadog.py
-```
+- **Full Refresh** (default) — Replaces all data in destination
+- **Incremental** — Only syncs new/updated records using state
 
-## Development
-
-```bash
-# Clone the repository
-git clone https://github.com/park-peter/brickbyte.git
-cd brickbyte
-
-# Install dependencies for the destination connector
-make install
-
-# Run tests
-pytest
+```python
+bb.sync(..., mode="incremental")
 ```
 
 ## Requirements
 
 - Python 3.10+
 - Databricks workspace with Unity Catalog
-- SQL Warehouse
-- Databricks SDK (for auto-authentication)
+- Running SQL Warehouse (auto-discovered)
 
 ## Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+Contributions welcome! Please submit a Pull Request.
 
 ## License
 
 MIT License - see [LICENSE](LICENSE) for details.
-
-## Acknowledgments
-
-- [Airbyte](https://airbyte.com) for building an incredible open-source data integration platform
-- [PyAirbyte](https://docs.airbyte.com/using-airbyte/pyairbyte/getting-started) for enabling Airbyte connectors to run anywhere Python runs
 
 ---
 
