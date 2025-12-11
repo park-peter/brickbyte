@@ -122,7 +122,7 @@ class BrickByte:
         self,
         catalog: str,
         schema: str,
-        http_path: str,
+        warehouse_id: Optional[str] = None,
         local_workspace: bool = True,
         server_hostname: Optional[str] = None,
         token: Optional[str] = None,
@@ -133,7 +133,8 @@ class BrickByte:
         Args:
             catalog: Unity Catalog name
             schema: Target schema name
-            http_path: SQL warehouse HTTP path (e.g., "/sql/1.0/warehouses/abc123")
+            warehouse_id: SQL warehouse ID. If not provided and local_workspace=True,
+                         will auto-discover a running warehouse.
             local_workspace: If True, use current workspace credentials via Databricks SDK.
                             If False, server_hostname and token must be provided.
             server_hostname: Databricks workspace hostname (required if local_workspace=False)
@@ -143,14 +144,19 @@ class BrickByte:
             Configured Airbyte destination
         
         Example:
-            # Use current workspace
+            # Use current workspace with auto-discovered warehouse
             destination = bb.get_databricks_destination(
-                catalog="main", schema="bronze", http_path="/sql/1.0/warehouses/abc123"
+                catalog="main", schema="bronze"
+            )
+            
+            # Use current workspace with specific warehouse
+            destination = bb.get_databricks_destination(
+                catalog="main", schema="bronze", warehouse_id="abc123def456"
             )
             
             # Connect to different workspace
             destination = bb.get_databricks_destination(
-                catalog="main", schema="bronze", http_path="/sql/1.0/warehouses/abc123",
+                catalog="main", schema="bronze", warehouse_id="abc123def456",
                 local_workspace=False, server_hostname="adb-xxx.azuredatabricks.net", token="dapi..."
             )
         """
@@ -158,7 +164,7 @@ class BrickByte:
             local_executable=self.get_destination_exec_path(),
             catalog=catalog,
             schema=schema,
-            http_path=http_path,
+            warehouse_id=warehouse_id,
             local_workspace=local_workspace,
             server_hostname=server_hostname,
             token=token,
