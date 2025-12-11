@@ -12,6 +12,7 @@ Airbyte has done the hard work of building and maintaining [600+ connectors](htt
 - **Run entirely in Databricks** — No separate infrastructure needed
 - **Support incremental syncs** — Only pull new data with state management
 - **Land data in Unity Catalog** — Write directly to your Databricks tables
+- **Auto-authenticate** — Uses Databricks SDK to connect to current workspace automatically
 
 ## How It Works
 
@@ -42,13 +43,11 @@ BrickByte manages isolated Python virtual environments for each connector to avo
 
 ### 1. Install in Databricks
 
-```python
-%pip install airbyte
-dbutils.library.restartPython()
-```
+Run the setup notebook or install manually:
 
 ```python
-%pip install git+https://github.com/stikkireddy/brickbyte.git --force-reinstall --no-deps
+%pip install airbyte
+%pip install git+https://github.com/park-peter/brickbyte.git --force-reinstall --no-deps
 dbutils.library.restartPython()
 ```
 
@@ -58,64 +57,84 @@ dbutils.library.restartPython()
 from brickbyte import BrickByte
 
 bb = BrickByte(
-    sources=["source-faker"],  # Airbyte source connector name
+    sources=["source-faker"],
     destination="destination-databricks",
-    destination_install="git+https://github.com/stikkireddy/brickbyte.git#subdirectory=integrations/destination-databricks-py"
+    destination_install="git+https://github.com/park-peter/brickbyte.git#subdirectory=integrations/destination-databricks-py"
 )
-
-bb.setup()  # Creates virtual environments and installs connectors
+bb.setup()
 ```
 
-### 3. Configure and Run Sync
+### 3. Configure Source
 
 ```python
 import airbyte as ab
 
-# Create a local cache for state management
 cache = bb.get_or_create_cache()
 
-# Configure your source
 source = ab.get_source(
     "source-faker",
     config={"count": 100},
     local_executable=bb.get_source_exec_path("source-faker")
 )
+source.check()
+source.select_all_streams()
+```
 
-source.check()  # Verify connection
-source.select_all_streams()  # Or select specific streams
+### 4. Run Sync
 
-# Configure the Databricks destination
-destination = ab.get_destination(
-    "destination-databricks",
-    config={
-        "server_hostname": "<your-databricks-hostname>",
-        "http_path": "/sql/1.0/warehouses/<warehouse-id>",
-        "token": "<your-databricks-token>",
-        "catalog": "your_catalog",
-        "schema": "your_schema",
-    },
-    local_executable=bb.get_destination_exec_path()
+```python
+# Uses current workspace credentials and auto-discovers a running warehouse
+destination = bb.get_databricks_destination(
+    catalog="your_catalog",
+    schema="your_schema",
 )
 
-# Run the sync
 write_result = destination.write(source, cache=cache, force_full_refresh=True)
 ```
 
-### 4. Cleanup
+### 5. Cleanup
 
 ```python
-bb.cleanup()  # Removes virtual environments
+bb.cleanup()
 ```
 
 ## Destination Configuration
 
+The `get_databricks_destination` method automatically uses your current workspace credentials and discovers a running SQL warehouse when running in a Databricks notebook.
+
+```python
+# Simplest: auto-detect everything (warehouse, host, token)
+destination = bb.get_databricks_destination(
+    catalog="main",
+    schema="bronze",
+)
+
+# Specify a particular warehouse
+destination = bb.get_databricks_destination(
+    catalog="main",
+    schema="bronze",
+    warehouse_id="abc123def456",
+)
+
+# Connect to a different workspace
+destination = bb.get_databricks_destination(
+    catalog="main",
+    schema="bronze",
+    warehouse_id="abc123def456",
+    local_workspace=False,
+    server_hostname="adb-xxx.azuredatabricks.net",
+    token="dapi..."
+)
+```
+
 | Parameter | Description | Required |
 |-----------|-------------|----------|
-| `server_hostname` | Databricks workspace hostname (e.g., `adb-xxx.azuredatabricks.net`) | ✅ |
-| `http_path` | SQL warehouse HTTP path (e.g., `/sql/1.0/warehouses/abc123`) | ✅ |
-| `token` | Databricks personal access token | ✅ |
-| `catalog` | Unity Catalog catalog name | ✅ |
+| `catalog` | Unity Catalog name | ✅ |
 | `schema` | Target schema name | ✅ |
+| `warehouse_id` | SQL warehouse ID (auto-discovered if not provided) | |
+| `local_workspace` | Use current workspace credentials (default: `True`) | |
+| `server_hostname` | Databricks hostname (required if `local_workspace=False`) | |
+| `token` | Databricks PAT (required if `local_workspace=False`) | |
 
 ## Supported Sources
 
@@ -135,6 +154,18 @@ BrickByte supports all [PyAirbyte-compatible sources](https://docs.airbyte.com/u
 | **Dev Tools** | GitHub, GitLab, Sentry |
 
 [View all 600+ connectors →](https://docs.airbyte.com/integrations)
+
+## Example Notebooks
+
+Example notebooks are available in the `notebooks/` directory:
+
+- `_setup.py` — Shared setup (install dependencies)
+- `brickbyte-example.py` — Basic example with source-faker
+- `brickbyte-confluence.py` — Sync from Atlassian Confluence
+- `brickbyte-github.py` — Sync from GitHub
+- `brickbyte-datadog.py` — Sync from DataDog
+
+These are Python files that Databricks reads as notebooks.
 
 ## Sync Modes
 
@@ -164,20 +195,27 @@ You can then use Databricks SQL or dbt to transform raw data into your preferred
 brickbyte/
 ├── src/brickbyte/
 │   ├── __init__.py      # BrickByte class & VirtualEnvManager
+│   ├── destination.py   # Databricks destination helper
 │   └── types.py         # Type definitions for sources & destinations
-└── integrations/
-    └── destination-databricks-py/
-        └── destination_databricks/
-            ├── destination.py  # Airbyte destination implementation
-            ├── writer.py       # SQL-based data writer
-            └── client.py       # Databricks SQL client
+├── integrations/
+│   └── destination-databricks-py/
+│       └── destination_databricks/
+│           ├── destination.py  # Airbyte destination implementation
+│           ├── writer.py       # SQL-based data writer
+│           └── client.py       # Databricks SQL client
+└── notebooks/
+    ├── _setup.py              # Shared setup notebook
+    ├── brickbyte-example.py   # Basic example
+    ├── brickbyte-confluence.py
+    ├── brickbyte-github.py
+    └── brickbyte-datadog.py
 ```
 
 ## Development
 
 ```bash
 # Clone the repository
-git clone https://github.com/stikkireddy/brickbyte.git
+git clone https://github.com/park-peter/brickbyte.git
 cd brickbyte
 
 # Install dependencies for the destination connector
@@ -191,8 +229,8 @@ pytest
 
 - Python 3.10+
 - Databricks workspace with Unity Catalog
-- SQL Warehouse or cluster with SQL capabilities
-- Databricks personal access token
+- SQL Warehouse
+- Databricks SDK (for auto-authentication)
 
 ## Contributing
 
@@ -212,4 +250,3 @@ MIT License - see [LICENSE](LICENSE) for details.
 <p align="center">
   Built with ❤️ for the Databricks community
 </p>
-
