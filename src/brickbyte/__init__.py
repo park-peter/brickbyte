@@ -6,7 +6,10 @@ from pathlib import Path
 import virtualenv
 from typing import Optional, List, Dict, Union
 
+from typing import Optional
+
 from brickbyte.types import Source, Destination
+from brickbyte.destination import _get_databricks_destination
 
 
 class VirtualEnvManager:
@@ -114,3 +117,49 @@ class BrickByte:
         for source_manager in self._source_env_managers.values():
             source_manager.delete_virtualenv()
         self._destination_env_manager.delete_virtualenv()
+
+    def get_databricks_destination(
+        self,
+        catalog: str,
+        schema: str,
+        http_path: str,
+        local_workspace: bool = True,
+        server_hostname: Optional[str] = None,
+        token: Optional[str] = None,
+    ):
+        """
+        Get a Databricks destination connector.
+        
+        Args:
+            catalog: Unity Catalog name
+            schema: Target schema name
+            http_path: SQL warehouse HTTP path (e.g., "/sql/1.0/warehouses/abc123")
+            local_workspace: If True, use current workspace credentials via Databricks SDK.
+                            If False, server_hostname and token must be provided.
+            server_hostname: Databricks workspace hostname (required if local_workspace=False)
+            token: Databricks personal access token (required if local_workspace=False)
+        
+        Returns:
+            Configured Airbyte destination
+        
+        Example:
+            # Use current workspace
+            destination = bb.get_databricks_destination(
+                catalog="main", schema="bronze", http_path="/sql/1.0/warehouses/abc123"
+            )
+            
+            # Connect to different workspace
+            destination = bb.get_databricks_destination(
+                catalog="main", schema="bronze", http_path="/sql/1.0/warehouses/abc123",
+                local_workspace=False, server_hostname="adb-xxx.azuredatabricks.net", token="dapi..."
+            )
+        """
+        return _get_databricks_destination(
+            local_executable=self.get_destination_exec_path(),
+            catalog=catalog,
+            schema=schema,
+            http_path=http_path,
+            local_workspace=local_workspace,
+            server_hostname=server_hostname,
+            token=token,
+        )
