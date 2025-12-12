@@ -16,10 +16,10 @@ repository = "https://github.com/airbytehq/airbyte"
 include = "destination_databricks"
 
 [tool.poetry.dependencies]
-python = "^3.9,<3.12"
-databricks-sql-connector = "==3.6.0"
-airbyte-cdk = "==0.68.1"
-requests = "==2.31.0"
+python = ">=3.10,<3.14"
+databricks-sql-connector = "==4.2.2"
+airbyte-cdk = "==7.6.0"
+requests = ">=2.32.0"
 
 [tool.poetry.scripts]
 destination-databricks = "destination_databricks.run:run"
