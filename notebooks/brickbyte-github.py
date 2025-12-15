@@ -2,7 +2,7 @@
 # MAGIC %md
 # MAGIC # BrickByte - GitHub Example
 # MAGIC 
-# MAGIC Sync data from GitHub to Databricks in one line.
+# MAGIC Sync data from GitHub to Databricks.
 # MAGIC 
 # MAGIC ## Prerequisites
 # MAGIC - GitHub Personal Access Token (https://github.com/settings/tokens)
@@ -17,6 +17,9 @@ from brickbyte import BrickByte
 
 bb = BrickByte()
 
+# COMMAND ----------
+
+# Simple sync
 result = bb.sync(
     source="source-github",
     source_config={
@@ -29,10 +32,30 @@ result = bb.sync(
     },
     catalog="",  # TODO: Set your Unity Catalog name
     schema="",   # TODO: Set your target schema
-    # streams=["commits", "issues", "pull_requests"],  # Optional: select specific streams
+    # staging_volume="", # Optional: Set if running outside of Databricks Notebooks
+    streams=["commits", "issues", "pull_requests"],  # Optional: select specific streams
 )
 
 print(f"Synced {result.records_written} records from {len(result.streams_synced)} streams")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Advanced: Preview Before Sync
+
+# COMMAND ----------
+
+# Preview what will change before syncing
+# preview = bb.preview(
+#     source="source-github",
+#     source_config={
+#         "credentials": {"personal_access_token": "ghp_..."},
+#         "repositories": ["owner/repo"],
+#     },
+#     catalog="main",
+#     schema="bronze",
+# )
+# print(preview)
 
 # COMMAND ----------
 
@@ -45,7 +68,7 @@ print(f"Synced {result.records_written} records from {len(result.streams_synced)
 # MAGIC     _airbyte_data:sha AS commit_sha,
 # MAGIC     _airbyte_data:commit.message AS message,
 # MAGIC     _airbyte_data:commit.author.name AS author
-# MAGIC FROM your_catalog.your_schema._airbyte_raw_commits
+# MAGIC FROM your_catalog.your_schema.commits
 # MAGIC ORDER BY _airbyte_data:commit.author.date DESC
 # MAGIC LIMIT 20;
 # MAGIC 
@@ -54,7 +77,7 @@ print(f"Synced {result.records_written} records from {len(result.streams_synced)
 # MAGIC     _airbyte_data:number AS issue_number,
 # MAGIC     _airbyte_data:title AS title,
 # MAGIC     _airbyte_data:state AS state
-# MAGIC FROM your_catalog.your_schema._airbyte_raw_issues
+# MAGIC FROM your_catalog.your_schema.issues
 # MAGIC WHERE _airbyte_data:state = 'open'
 # MAGIC LIMIT 20;
 # MAGIC ```

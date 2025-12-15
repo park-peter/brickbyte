@@ -1,16 +1,24 @@
 """
 BrickByte - Bridge Airbyte's 600+ connectors directly into Databricks.
 """
+import logging
 import os
 import shutil
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional
 
 import virtualenv
 
 from brickbyte.types import Source
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
+logger = logging.getLogger("brickbyte")
 
 
 @dataclass
@@ -19,6 +27,7 @@ class SyncResult:
 
     records_written: int
     streams_synced: List[str]
+    enriched_tables: List[str] = field(default_factory=list)
 
 
 class VirtualEnvManager:
@@ -52,31 +61,15 @@ class VirtualEnvManager:
 class BrickByte:
     """
     BrickByte - Sync data from any Airbyte source to Databricks.
-
-    Example (simplest):
-        bb = BrickByte()
-        bb.sync(
-            source="source-faker",
-            source_config={"count": 100},
-            catalog="main",
-            schema="bronze",
-        )
-
-    Example (with stream selection):
-        bb = BrickByte()
-        bb.sync(
-            source="source-github",
-            source_config={
-                "credentials": {"personal_access_token": "..."},
-                "repositories": ["owner/repo"],
-            },
-            catalog="main",
-            schema="bronze",
-            streams=["commits", "issues"],
-        )
+    
+    Uses a streaming architecture to bypass local disk storage and
+    write directly to Unity Catalog Volumes.
     """
 
-    def __init__(self, base_venv_directory: Optional[str] = None):
+    def __init__(
+        self, 
+        base_venv_directory: Optional[str] = None,
+    ):
         """
         Initialize BrickByte.
 
@@ -86,7 +79,6 @@ class BrickByte:
         """
         self._base_venv_directory = base_venv_directory or str(Path.home())
         self._source_env_managers: Dict[str, VirtualEnvManager] = {}
-        self._cache = None
 
     def _setup_source(self, source: str, source_install: Optional[str] = None):
         """Install source connector in isolated venv."""
@@ -103,84 +95,68 @@ class BrickByte:
         """Get path to source connector executable."""
         return os.path.join(self._source_env_managers[source].bin_path, source)
 
-    def _get_cache(self):
-        """Get or create local cache for state management."""
-        if self._cache:
-            return self._cache
+    def _validate_sync_params(
+        self,
+        mode: str,
+        staging_volume: str,
+    ):
+        """Validate sync parameters."""
+        # Validate mode
+        # Currently we only support what StreamingWriter supports (effectively append/create)
+        # But we keep parameter for API compatibility/future expansion
+        valid_modes = ("append", "overwrite", "merge")
+        if mode not in valid_modes:
+            raise ValueError(
+                f"Invalid mode '{mode}'. Must be one of: {', '.join(valid_modes)}"
+            )
+            
+        if not staging_volume:
+            # staging_volume is conditionally required by the factory (if no active Spark session)
+            # We defer detailed validation to the factory
+            pass
 
-        import airbyte as ab
-
-        path = os.path.join(self._base_venv_directory, "brickbyte", "cache")
-        self._cache = ab.new_local_cache(
-            cache_name="brickbyte", cache_dir=path, cleanup=True
-        )
-        return self._cache
-
-    def sync(
+    def preview(
         self,
         source: str,
         source_config: dict,
         catalog: str,
         schema: str,
         streams: Optional[List[str]] = None,
-        warehouse_id: Optional[str] = None,
-        mode: str = "full_refresh",
+        primary_key: Optional[Dict[str, List[str]]] = None,
         source_install: Optional[str] = None,
-        cleanup: bool = True,
-    ) -> SyncResult:
+        sample_size: int = 5,
+    ):
         """
-        Sync data from an Airbyte source to Databricks.
-
-        This is the main method - it handles everything:
-        - Installs source connector in isolated venv
-        - Configures and validates source connection
-        - Reads data to local cache
-        - Auto-discovers warehouse and authenticates to Databricks
-        - Writes data directly to Unity Catalog
-        - Cleans up virtual environments
+        Preview a sync operation.
 
         Args:
-            source: Airbyte source connector name (e.g., "source-github")
-            source_config: Configuration dictionary for the source connector
-            catalog: Unity Catalog name (e.g., "main")
-            schema: Target schema name (e.g., "bronze")
-            streams: List of streams to sync. None = all streams (default)
-            warehouse_id: SQL warehouse ID. Auto-discovered if not provided.
-            mode: "full_refresh" (default) or "incremental"
-            source_install: Override source installation (e.g., custom git URL)
-            cleanup: Whether to cleanup venvs after sync (default: True)
+            source: Airbyte source connector name
+            source_config: Configuration dictionary for the source
+            catalog: Unity Catalog name
+            schema: Target schema name
+            streams: List of streams to preview (None = all streams)
+            primary_key: For merge preview, dict mapping stream names to keys
+            source_install: Override source installation
+            sample_size: Number of sample records per stream
 
         Returns:
-            SyncResult with records_written and streams_synced
-
-        Example:
-            bb = BrickByte()
-            result = bb.sync(
-                source="source-faker",
-                source_config={"count": 100},
-                catalog="main",
-                schema="bronze",
-            )
-            print(f"Synced {result.records_written} records")
+            PreviewResult with detailed comparison
         """
         import airbyte as ab
 
-        from brickbyte.writer import create_writer
+        from brickbyte.preview import PreviewEngine
 
         try:
-            # Setup source connector
-            print(f"Setting up {source}...")
+            # Setup source
+            logger.info(f"Setting up {source}...")
             self._setup_source(source, source_install)
 
             # Configure source
-            print(f"Configuring {source}...")
             ab_source = ab.get_source(
                 source,
                 config=source_config,
                 local_executable=self._get_source_exec_path(source),
             )
-
-            print("Validating source connection...")
             ab_source.check()
 
             if streams:
@@ -190,32 +166,146 @@ class BrickByte:
 
             selected = list(ab_source.get_selected_streams())
 
-            # Read data to cache
-            print(f"Reading {len(selected)} streams from source...")
-            cache = self._get_cache()
-            ab_source.read(cache=cache)
+            # Generate preview
+            logger.info("Generating preview (streaming)...")
+            engine = PreviewEngine(catalog=catalog, schema=schema)
+            result = engine.preview(
+                ab_source=ab_source,
+                streams=selected,
+                primary_key=primary_key,
+                sample_size=sample_size,
+            )
 
-            # Write to Databricks
-            print(f"Writing to {catalog}.{schema}...")
-            writer = create_writer(
+            return result
+
+        finally:
+            self.cleanup()
+
+    def sync(
+        self,
+        source: str,
+        source_config: dict,
+        catalog: str,
+        schema: str,
+        staging_volume: Optional[str] = None,
+        streams: Optional[List[str]] = None,
+        primary_key: Optional[Dict[str, List[str]]] = None,
+        mode: str = "overwrite",
+        enrich_metadata: bool = False,
+        warehouse_id: Optional[str] = None,
+        source_install: Optional[str] = None,
+        cleanup: bool = True,
+    ) -> SyncResult:
+        """
+        Sync data from an Airbyte source to Databricks (Streaming).
+
+        Args:
+            source: Airbyte source connector name (e.g., "source-github")
+            source_config: Configuration dictionary for the source connector
+            catalog: Unity Catalog name (e.g., "main")
+            schema: Target schema name (e.g., "bronze")
+            staging_volume: Unity Catalog Volume path (REQUIRED)
+            streams: List of streams to sync. None = all streams (default)
+            primary_key: For merge mode, dict mapping stream names to key columns
+            mode: Write mode (currently supports "overwrite" mainly)
+            enrich_metadata: If True, use AI to generate column descriptions
+            warehouse_id: SQL warehouse ID (optional, auto-discovered)
+            source_install: Override source installation (e.g., custom git URL)
+            cleanup: Whether to cleanup venvs after sync (default: True)
+
+        Returns:
+            SyncResult with records_written, streams_synced, and enriched_tables
+        """
+        import airbyte as ab
+
+        from brickbyte.writers import create_streaming_writer
+
+        # Validate parameters
+        self._validate_sync_params(mode, staging_volume)
+
+        try:
+            # Setup source connector
+            logger.info(f"Setting up {source}...")
+            self._setup_source(source, source_install)
+
+            # Configure source
+            logger.info(f"Configuring {source}...")
+            ab_source = ab.get_source(
+                source,
+                config=source_config,
+                local_executable=self._get_source_exec_path(source),
+            )
+
+            logger.info("Validating source connection...")
+            ab_source.check()
+
+            if streams:
+                ab_source.select_streams(streams)
+            else:
+                ab_source.select_all_streams()
+
+            selected = list(ab_source.get_selected_streams())
+
+            # STREAMING EXECUTION
+            via_msg = f" via {staging_volume}" if staging_volume else " (Native Spark)"
+            logger.info(f"Streaming {len(selected)} streams to {catalog}.{schema}{via_msg}...")
+            
+            writer = create_streaming_writer(
                 catalog=catalog,
                 schema=schema,
+                staging_volume=staging_volume,
                 warehouse_id=warehouse_id,
             )
+            
+            total_records = 0
+            # Iterate through selected streams
+            for stream_name in selected:
+                logger.info(f"  Streaming: {stream_name}")
+                
+                # Handle Overwrite Mode
+                if mode == "overwrite":
+                    writer.drop_table(stream_name)
 
-            full_refresh = mode == "full_refresh"
-            records = writer.write_from_cache(
-                cache=cache,
-                streams=selected,
-                full_refresh=full_refresh,
-            )
+                try:
+                    records_generator = ab_source.get_records(stream_name)
+                    count = 0
+                    for record in records_generator:
+                        writer.write_record(stream_name, record)
+                        count += 1
+                        if count % 10000 == 0:
+                            logger.info(f"    ...streamed {count} records")
+                    
+                    # Flush remaining
+                    writer.flush_stream(stream_name)
+                    logger.info(f"    ✓ {count} records streamed")
+                    total_records += count
+                except Exception as e:
+                    logger.warning(f"  Warning: Streaming failed for {stream_name}: {e}")
+            
             writer.close()
+            
+            # Enrich metadata with AI if requested
+            enriched_tables = []
+            if enrich_metadata:
+                logger.info("Enriching metadata with AI...")
+                from brickbyte.enrichment import enrich_table
 
-            print(f"✓ Synced {records} records from {len(selected)} streams")
+                for stream_name in selected:
+                    try:
+                        enrich_table(
+                            catalog=catalog,
+                            schema=schema,
+                            table=stream_name,
+                            apply_to_catalog=True,
+                        )
+                        enriched_tables.append(stream_name)
+                    except Exception as e:
+                        logger.warning(f"  Warning: Could not enrich {stream_name}: {e}")
 
             return SyncResult(
-                records_written=records,
+                records_written=total_records,
                 streams_synced=selected,
+                enriched_tables=enriched_tables,
             )
 
         finally:
@@ -223,7 +313,7 @@ class BrickByte:
                 self.cleanup()
 
     def cleanup(self):
-        """Remove virtual environments created by BrickByte."""
+        """Remove virtual environments."""
         for manager in self._source_env_managers.values():
             manager.delete_virtualenv()
         self._source_env_managers.clear()

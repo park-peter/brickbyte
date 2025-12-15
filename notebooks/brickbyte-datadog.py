@@ -2,7 +2,7 @@
 # MAGIC %md
 # MAGIC # BrickByte - DataDog Example
 # MAGIC 
-# MAGIC Sync monitoring data from DataDog to Databricks in one line.
+# MAGIC Sync monitoring data from DataDog to Databricks.
 # MAGIC 
 # MAGIC ## Prerequisites
 # MAGIC - DataDog API Key (https://app.datadoghq.com/organization-settings/api-keys)
@@ -18,6 +18,9 @@ from brickbyte import BrickByte
 
 bb = BrickByte()
 
+# COMMAND ----------
+
+# Simple sync
 result = bb.sync(
     source="source-datadog",
     source_config={
@@ -29,6 +32,7 @@ result = bb.sync(
     },
     catalog="",  # TODO: Set your Unity Catalog name
     schema="",   # TODO: Set your target schema
+    # staging_volume="", # Optional: Set if running outside of Databricks Notebooks
     # streams=["monitors", "dashboards"],  # Optional: select specific streams
 )
 
@@ -45,7 +49,7 @@ print(f"Synced {result.records_written} records from {len(result.streams_synced)
 # MAGIC     _airbyte_data:id AS monitor_id,
 # MAGIC     _airbyte_data:name AS name,
 # MAGIC     _airbyte_data:overall_state AS status
-# MAGIC FROM your_catalog.your_schema._airbyte_raw_monitors
+# MAGIC FROM your_catalog.your_schema.monitors
 # MAGIC LIMIT 20;
 # MAGIC 
 # MAGIC -- View dashboards
@@ -53,6 +57,6 @@ print(f"Synced {result.records_written} records from {len(result.streams_synced)
 # MAGIC     _airbyte_data:id AS dashboard_id,
 # MAGIC     _airbyte_data:title AS title,
 # MAGIC     _airbyte_data:author_handle AS author
-# MAGIC FROM your_catalog.your_schema._airbyte_raw_dashboards
+# MAGIC FROM your_catalog.your_schema.dashboards
 # MAGIC LIMIT 20;
 # MAGIC ```

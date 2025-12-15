@@ -2,7 +2,7 @@
 # MAGIC %md
 # MAGIC # BrickByte - Confluence Example
 # MAGIC 
-# MAGIC Sync data from Atlassian Confluence to Databricks in one line.
+# MAGIC Sync data from Atlassian Confluence to Databricks.
 # MAGIC 
 # MAGIC ## Prerequisites
 # MAGIC - Confluence Cloud account
@@ -18,6 +18,9 @@ from brickbyte import BrickByte
 
 bb = BrickByte()
 
+# COMMAND ----------
+
+# Simple sync
 result = bb.sync(
     source="source-confluence",
     source_config={
@@ -27,6 +30,7 @@ result = bb.sync(
     },
     catalog="",  # TODO: Set your Unity Catalog name
     schema="",   # TODO: Set your target schema
+    # staging_volume="", # Optional: Set if running outside of Databricks Notebooks
     # streams=["pages", "spaces"],  # Optional: select specific streams
 )
 
@@ -42,6 +46,6 @@ print(f"Synced {result.records_written} records from {len(result.streams_synced)
 # MAGIC     _airbyte_data:id AS page_id,
 # MAGIC     _airbyte_data:title AS title,
 # MAGIC     _airbyte_data:status AS status
-# MAGIC FROM your_catalog.your_schema._airbyte_raw_pages
+# MAGIC FROM your_catalog.your_schema.pages
 # MAGIC LIMIT 10;
 # MAGIC ```
