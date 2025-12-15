@@ -61,6 +61,7 @@ result = bb.sync(
     schema="bronze",
     staging_volume="main.staging.brickbyte_volume",
     enrich_metadata=True,  # Auto-generate column descriptions
+    # buffer_size_records=50000, # Optional: Adjust for larger batches
 )
 # Tables now have AI-generated column descriptions in Unity Catalog
 ```

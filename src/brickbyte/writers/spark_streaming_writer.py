@@ -1,10 +1,16 @@
 """
 Spark Streaming writer for BrickByte using native Databricks/Spark execution.
+
+Uses micro-batch streaming for:
+- Bounded memory usage (flushes at configurable thresholds)
+- Fault tolerance (each flush = implicit checkpoint)
+- Databricks auto-optimize handles small file compaction
 """
 import json
 import logging
 import os
 import shutil
+import sys
 from datetime import datetime
 from typing import Dict, List, Optional
 from uuid import uuid4
@@ -16,41 +22,47 @@ from brickbyte.writers.base import BaseWriter
 
 logger = logging.getLogger(__name__)
 
+
 class SparkStreamingWriter(BaseWriter):
     """
-    Writes data to Databricks using native Spark streaming micro-batches.
+    Writes data to Databricks using micro-batch streaming.
     
-    Buffers records in memory using PyArrow, writes micro-batches to
-    local temp storage, and loads them using Spark.
+    Each flush writes to Delta immediately, providing:
+    - Implicit checkpointing (resume from last successful batch on failure)
+    - Bounded memory (configurable batch size)
+    - Databricks auto-optimize handles small file compaction
     """
 
     def __init__(
         self,
         catalog: str,
         schema: str,
-        buffer_size_records: int = 10000,
-        buffer_size_mb: int = 50,
+        buffer_size_records: int = 50000,
+        buffer_size_mb: int = 100,
     ):
         """
-        Initialize the Spark Streaming writer.
-
+        Initialize Spark Streaming Writer.
+        
         Args:
             catalog: Unity Catalog name
             schema: Target schema name
-            buffer_size_records: Max records before flush
-            buffer_size_mb: Max buffer size in MB before flush
+            buffer_size_records: Records per micro-batch (default: 50k)
+            buffer_size_mb: Max batch size in MB (default: 100MB)
         """
         super().__init__(catalog, schema)
         self.buffer_size_records = buffer_size_records
-        self.buffer_size_mb = buffer_size_mb * 1024 * 1024  # Convert to bytes
+        self.buffer_size_bytes = buffer_size_mb * 1024 * 1024
 
         self._spark = None
-        # buffer structure: {stream_name: [list of records]}
         self._buffers: Dict[str, List[dict]] = {}
         self._buffer_counts: Dict[str, int] = {}
+        self._buffer_sizes: Dict[str, int] = {}
         
-        # Local temp directory for buffering
-        self._temp_dir = "/local_disk0/tmp/brickbyte_spark_streaming"
+        spark_local_dir = os.environ.get("SPARK_LOCAL_DIRS", "/tmp")
+        if "," in spark_local_dir:
+            spark_local_dir = spark_local_dir.split(",")[0]
+            
+        self._temp_dir = os.path.join(spark_local_dir, "brickbyte_spark_streaming")
         os.makedirs(self._temp_dir, exist_ok=True)
 
     @property
@@ -95,84 +107,77 @@ class SparkStreamingWriter(BaseWriter):
         }
 
     def write_record(self, stream_name: str, record: dict):
-        """
-        Buffer a single record.
-        """
+        """Buffer a single record."""
         if stream_name not in self._buffers:
             self._buffers[stream_name] = []
             self._buffer_counts[stream_name] = 0
+            self._buffer_sizes[stream_name] = 0
             
         transformed = self._transform_record(record)
         self._buffers[stream_name].append(transformed)
         self._buffer_counts[stream_name] += 1
+        self._buffer_sizes[stream_name] += sys.getsizeof(transformed.get("_airbyte_data", ""))
         
-        if self._buffer_counts[stream_name] >= self.buffer_size_records:
-            self.flush_stream(stream_name)
+        # Flush micro-batch when thresholds hit
+        if (self._buffer_counts[stream_name] >= self.buffer_size_records or
+                self._buffer_sizes[stream_name] >= self.buffer_size_bytes):
+            self._write_micro_batch(stream_name)
 
-    def flush_stream(self, stream_name: str):
-        """Flush buffer for a specific stream."""
+    def _write_micro_batch(self, stream_name: str):
+        """Write a micro-batch to Delta (each call = implicit checkpoint)."""
         if stream_name not in self._buffers or not self._buffers[stream_name]:
             return
 
         records = self._buffers[stream_name]
+        batch_count = len(records)
+        
+        staging_dir = self._get_staging_dir(stream_name)
+        filename = f"batch_{datetime.now().strftime('%Y%m%d%H%M%S%f')}.parquet"
+        file_path = os.path.join(staging_dir, filename)
         
         try:
-            # 1. Convert to PyArrow Table
+            # Write to local parquet
             table = pa.Table.from_pylist(records)
+            pq.write_table(table, file_path, compression='zstd')
             
-            # 2. Write to local Parquet
-            staging_dir = self._get_staging_dir(stream_name)
-            filename = f"batch_{datetime.now().strftime('%Y%m%d%H%M%S%f')}.parquet"
-            file_path = os.path.join(staging_dir, filename)
-            
-            pq.write_table(table, file_path)
-            
-            # 3. Load via Spark
+            # Load via Spark and write to Delta
             table_name = self.get_table_name(stream_name)
-            
-            # Read local parquet
             df = self.spark.read.parquet(file_path)
             
-            # Write to Delta
             (df.write
                .format("delta")
                .mode("append")
                .option("mergeSchema", "true")
                .saveAsTable(table_name))
             
-            # 4. Cleanup
-            os.remove(file_path)
+            logger.debug(f"Checkpoint: {batch_count} records written to {table_name}")
             
         except Exception as e:
-            logger.error(f"Error flushing stream {stream_name}: {e}")
-            raise e
+            logger.error(f"Error writing micro-batch for {stream_name}: {e}")
+            raise
+        finally:
+            # Cleanup staging file
+            try:
+                os.remove(file_path)
+            except OSError:
+                pass
         
         # Reset buffer
         self._buffers[stream_name] = []
         self._buffer_counts[stream_name] = 0
+        self._buffer_sizes[stream_name] = 0
 
-    def write(self, cache: any, streams: List[str], mode: str = "overwrite", **kwargs) -> int:
-        """Compatibility wrapper."""
-        total = 0
-        for stream in streams:
-            if mode == "overwrite":
-                self.drop_table(stream)
-            
-            dataset = cache[stream]
-            for record in dataset.to_pandas().to_dict(orient="records"):
-                self.write_record(stream, record)
-                total += 1
-            self.flush_stream(stream)
-        return total
+    def flush_stream(self, stream_name: str):
+        """Flush any remaining buffered records to Delta."""
+        self._write_micro_batch(stream_name)
 
     def close(self):
-        """Flush all remaining buffers."""
+        """Flush all remaining buffers and clean up."""
         for stream_name in list(self._buffers.keys()):
             self.flush_stream(stream_name)
         
-        # Try to cleanup temp dir
         try:
             if os.path.exists(self._temp_dir):
                 shutil.rmtree(self._temp_dir)
-        except Exception:
+        except OSError:
             pass

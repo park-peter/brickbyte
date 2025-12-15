@@ -49,7 +49,10 @@ class StreamPreview:
             parts.append(f"-{self.deleted_records} deleted")
         
         if not parts:
-            parts.append(f"{self.source_count} records")
+            if self.source_count >= 0:
+                parts.append(f"{self.source_count} records")
+            else:
+                parts.append("Unknown records (Streaming)")
         
         line = f"{self.stream_name}: {' | '.join(parts)}"
         
@@ -206,7 +209,6 @@ class PreviewEngine:
         self,
         ab_source: Any,
         stream_name: str,
-        primary_key: Optional[List[str]] = None,
         sample_size: int = 5,
     ) -> StreamPreview:
         """Generate preview for a single stream."""
@@ -244,7 +246,6 @@ class PreviewEngine:
         self,
         ab_source: Any,
         streams: List[str],
-        primary_key: Optional[Dict[str, List[str]]] = None,
         sample_size: int = 5,
     ) -> PreviewResult:
         """
@@ -253,7 +254,6 @@ class PreviewEngine:
         Args:
             ab_source: Initialized Airbyte source
             streams: List of stream names
-            primary_key: Optional dict mapping stream names to primary key columns
             sample_size: Number of sample records per stream
         
         Returns:
@@ -262,9 +262,8 @@ class PreviewEngine:
         result = PreviewResult()
         
         for stream_name in streams:
-            keys = primary_key.get(stream_name) if primary_key else None
             stream_preview = self.preview_stream(
-                ab_source, stream_name, keys, sample_size
+                ab_source, stream_name, sample_size
             )
             result.streams.append(stream_preview)
             

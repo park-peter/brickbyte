@@ -3,7 +3,7 @@ Abstract base writer for BrickByte.
 Defines the interface all writers must implement.
 """
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional
+from typing import Dict, Optional
 
 
 class BaseWriter(ABC):
@@ -29,28 +29,6 @@ class BaseWriter(ABC):
         return f"{self.catalog}.{self.schema}.{stream_name}"
     
     @abstractmethod
-    def write(
-        self,
-        cache: Any,
-        streams: List[str],
-        mode: str = "overwrite",
-        primary_key: Optional[Dict[str, List[str]]] = None,
-    ) -> int:
-        """
-        Write data from cache to Databricks.
-        
-        Args:
-            cache: PyAirbyte cache object containing the data
-            streams: List of stream names to write
-            mode: Write mode - "append", "overwrite", or "merge"
-            primary_key: For merge mode, dict mapping stream names to primary key columns
-        
-        Returns:
-            Total number of records written
-        """
-        pass
-    
-    @abstractmethod
     def table_exists(self, stream_name: str) -> bool:
         """Check if a table exists."""
         pass
@@ -66,7 +44,22 @@ class BaseWriter(ABC):
         pass
     
     @abstractmethod
+    def drop_table(self, stream_name: str):
+        """Drop a table if it exists."""
+        pass
+    
+    @abstractmethod
+    def write_record(self, stream_name: str, record: dict):
+        """Buffer a single record for writing."""
+        pass
+    
+    @abstractmethod
+    def flush_stream(self, stream_name: str):
+        """Flush buffered records for a specific stream."""
+        pass
+    
+    @abstractmethod
     def close(self):
-        """Clean up resources."""
+        """Flush all buffers and clean up resources."""
         pass
 

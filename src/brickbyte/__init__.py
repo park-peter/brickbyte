@@ -104,8 +104,10 @@ class BrickByte:
         # Validate mode
         # Currently we only support what StreamingWriter supports (effectively append/create)
         # But we keep parameter for API compatibility/future expansion
-        valid_modes = ("append", "overwrite", "merge")
+        valid_modes = ("append", "overwrite")
         if mode not in valid_modes:
+            if mode == "merge":
+                raise NotImplementedError("Merge mode is not yet supported in streaming architecture.")
             raise ValueError(
                 f"Invalid mode '{mode}'. Must be one of: {', '.join(valid_modes)}"
             )
@@ -122,7 +124,6 @@ class BrickByte:
         catalog: str,
         schema: str,
         streams: Optional[List[str]] = None,
-        primary_key: Optional[Dict[str, List[str]]] = None,
         source_install: Optional[str] = None,
         sample_size: int = 5,
     ):
@@ -172,7 +173,6 @@ class BrickByte:
             result = engine.preview(
                 ab_source=ab_source,
                 streams=selected,
-                primary_key=primary_key,
                 sample_size=sample_size,
             )
 
@@ -189,29 +189,31 @@ class BrickByte:
         schema: str,
         staging_volume: Optional[str] = None,
         streams: Optional[List[str]] = None,
-        primary_key: Optional[Dict[str, List[str]]] = None,
         mode: str = "overwrite",
         enrich_metadata: bool = False,
         warehouse_id: Optional[str] = None,
         source_install: Optional[str] = None,
         cleanup: bool = True,
+        buffer_size_records: int = 50000,
+        buffer_size_mb: int = 100,
     ) -> SyncResult:
         """
         Sync data from an Airbyte source to Databricks (Streaming).
-
+        
         Args:
             source: Airbyte source connector name (e.g., "source-github")
             source_config: Configuration dictionary for the source connector
             catalog: Unity Catalog name (e.g., "main")
             schema: Target schema name (e.g., "bronze")
-            staging_volume: Unity Catalog Volume path (REQUIRED)
+            staging_volume: Unity Catalog Volume path (REQUIRED for remote)
             streams: List of streams to sync. None = all streams (default)
-            primary_key: For merge mode, dict mapping stream names to key columns
-            mode: Write mode (currently supports "overwrite" mainly)
+            mode: Write mode (currently supports "overwrite" and "append")
             enrich_metadata: If True, use AI to generate column descriptions
             warehouse_id: SQL warehouse ID (optional, auto-discovered)
             source_install: Override source installation (e.g., custom git URL)
             cleanup: Whether to cleanup venvs after sync (default: True)
+            buffer_size_records: Records per micro-batch (default: 50k)
+            buffer_size_mb: Max batch size in MB (default: 100MB)
 
         Returns:
             SyncResult with records_written, streams_synced, and enriched_tables
@@ -255,6 +257,8 @@ class BrickByte:
                 schema=schema,
                 staging_volume=staging_volume,
                 warehouse_id=warehouse_id,
+                buffer_size_records=buffer_size_records,
+                buffer_size_mb=buffer_size_mb,
             )
             
             total_records = 0
