@@ -58,11 +58,9 @@ class SparkStreamingWriter(BaseWriter):
         self._buffer_counts: Dict[str, int] = {}
         self._buffer_sizes: Dict[str, int] = {}
         
-        spark_local_dir = os.environ.get("SPARK_LOCAL_DIRS", "/tmp")
-        if "," in spark_local_dir:
-            spark_local_dir = spark_local_dir.split(",")[0]
-            
-        self._temp_dir = os.path.join(spark_local_dir, "brickbyte_spark_streaming")
+        # Use /tmp for staging - always writable on Databricks
+        # SPARK_LOCAL_DIRS often points to /local_disk0 which has permission restrictions
+        self._temp_dir = os.path.join("/tmp", "brickbyte_spark_streaming")
         os.makedirs(self._temp_dir, exist_ok=True)
 
     @property
