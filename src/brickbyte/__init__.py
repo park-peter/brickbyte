@@ -18,7 +18,25 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
+# Configure logging - suppress noisy third-party DEBUG/INFO logs
+logging.getLogger().setLevel(logging.WARNING)
+
+_noisy_loggers = [
+    "py4j",
+    "pyspark",
+    "pyspark.sql.connect",
+    "pyspark.sql.connect.client",
+    "databricks",
+    "databricks.sdk",
+    "urllib3",
+    "grpc",
+    "airbyte",
+]
+for _logger_name in _noisy_loggers:
+    logging.getLogger(_logger_name).setLevel(logging.WARNING)
+
 logger = logging.getLogger("brickbyte")
+logger.setLevel(logging.INFO)
 
 
 @dataclass
