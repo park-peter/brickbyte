@@ -1,7 +1,6 @@
 """
 Unit tests for SparkStreamingWriter.
 """
-import os
 from datetime import datetime
 from unittest.mock import MagicMock, patch
 
@@ -13,28 +12,26 @@ from brickbyte.writers.spark_streaming_writer import SparkStreamingWriter
 class TestSparkStreamingWriter:
 
     @pytest.fixture
-    def writer(self, tmp_path):
+    def writer(self):
         """Create a SparkStreamingWriter with mocked Spark."""
-        with patch.dict(os.environ, {"SPARK_LOCAL_DIRS": str(tmp_path)}):
-            writer = SparkStreamingWriter(
-                catalog="main",
-                schema="test",
-                buffer_size_records=3,
-                buffer_size_mb=1,
-            )
-            # Mock Spark session
-            writer._spark = MagicMock()
-            return writer
+        writer = SparkStreamingWriter(
+            catalog="main",
+            schema="test",
+            buffer_size_records=3,
+            buffer_size_mb=1,
+        )
+        # Mock Spark session
+        writer._spark = MagicMock()
+        return writer
 
-    def test_init_defaults(self, tmp_path):
+    def test_init_defaults(self):
         """Test default initialization values."""
-        with patch.dict(os.environ, {"SPARK_LOCAL_DIRS": str(tmp_path)}):
-            writer = SparkStreamingWriter(catalog="main", schema="bronze")
-            
-            assert writer.catalog == "main"
-            assert writer.schema == "bronze"
-            assert writer.buffer_size_records == 50000
-            assert writer.buffer_size_bytes == 100 * 1024 * 1024  # 100MB
+        writer = SparkStreamingWriter(catalog="main", schema="bronze")
+        
+        assert writer.catalog == "main"
+        assert writer.schema == "bronze"
+        assert writer.buffer_size_records == 50000
+        assert writer.buffer_size_bytes == 100 * 1024 * 1024  # 100MB
 
     def test_get_table_name(self, writer):
         """Test fully qualified table name generation."""
@@ -81,10 +78,8 @@ class TestSparkStreamingWriter:
         writer.write_record("stream1", {"id": 3})
         assert writer._write_micro_batch.call_count == 1
 
-    @patch("pyarrow.parquet.write_table")
-    @patch("os.remove")
-    def test_write_micro_batch(self, mock_remove, mock_pq_write, writer):
-        """Test micro-batch write to Delta."""
+    def test_write_micro_batch(self, writer):
+        """Test micro-batch write to Delta via createDataFrame."""
         # Setup buffer
         writer._buffers["stream1"] = [
             {"_airbyte_raw_id": "1", "_airbyte_extracted_at": datetime.now(), "_airbyte_data": "{}"}
@@ -92,18 +87,24 @@ class TestSparkStreamingWriter:
         writer._buffer_counts["stream1"] = 1
         writer._buffer_sizes["stream1"] = 100
         
-        # Mock Spark operations
+        # Mock Spark createDataFrame chain
         mock_df = MagicMock()
-        writer._spark.read.parquet.return_value = mock_df
+        mock_write = MagicMock()
+        mock_df.write = mock_write
+        mock_write.format.return_value = mock_write
+        mock_write.mode.return_value = mock_write
+        mock_write.option.return_value = mock_write
+        writer._spark.createDataFrame.return_value = mock_df
         
         writer._write_micro_batch("stream1")
         
-        # Verify parquet was written
-        mock_pq_write.assert_called_once()
+        # Verify createDataFrame was called
+        writer._spark.createDataFrame.assert_called_once()
         
-        # Verify Spark read/write
-        writer._spark.read.parquet.assert_called_once()
-        mock_df.write.format.assert_called_with("delta")
+        # Verify write chain
+        mock_write.format.assert_called_with("delta")
+        mock_write.mode.assert_called_with("append")
+        mock_write.saveAsTable.assert_called_with("main.test.stream1")
         
         # Verify buffer was reset
         assert writer._buffers["stream1"] == []
@@ -163,10 +164,10 @@ class TestSparkStreamingWriter:
         
         assert schema == {"id": "LongType", "name": "StringType"}
 
-    def test_staging_dir_creation(self, writer):
-        """Test that staging directories are created."""
-        staging_dir = writer._get_staging_dir("test_stream")
+    def test_transform_record_handles_datetime(self, writer):
+        """Test that datetime objects in records are serialized."""
+        record = {"id": 1, "created_at": datetime(2024, 1, 1, 12, 0, 0)}
+        transformed = writer._transform_record(record)
         
-        assert os.path.exists(staging_dir)
-        assert "test_stream" in staging_dir
-
+        # Should not raise, datetime converted to string via default=str
+        assert "2024-01-01" in transformed["_airbyte_data"]

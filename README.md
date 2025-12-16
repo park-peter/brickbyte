@@ -9,7 +9,7 @@ BrickByte wraps [PyAirbyte](https://github.com/airbytehq/airbyte) to extract dat
 - **600+ Sources** - All Airbyte connectors work out of the box
 - **Streaming Architecture** - Bypasses local disk, no OOM issues
 - **High Performance** - Uses Unity Catalog Volumes and `COPY INTO`
-- **AI Enrichment** - Auto-generate column descriptions via Foundation Models
+- **AI Enrichment** - Auto-generate table descriptions and detect PII via Foundation Models
 - **Preview** - See what schema changes will occur before syncing
 - **Simple API** - One-line sync
 
@@ -60,10 +60,12 @@ result = bb.sync(
     catalog="main",
     schema="bronze",
     staging_volume="main.staging.brickbyte_volume",
-    enrich_metadata=True,  # Auto-generate column descriptions
-    # buffer_size_records=50000, # Optional: Adjust for larger batches
+    enrich_metadata=True,  # AI-powered metadata enrichment
 )
-# Tables now have AI-generated column descriptions in Unity Catalog
+# Tables get:
+#   - AI-generated table description (COMMENT ON TABLE)
+#   - Field descriptions stored in TBLPROPERTIES
+#   - PII detection stored as table TAGS
 ```
 
 ### Preview Before Sync
@@ -83,19 +85,18 @@ print(preview)
 ### Hybrid Mode
 BrickByte automatically selects the best write strategy:
 
-1. **Native Spark Streaming** (Default in Databricks Notebooks/Jobs)
-   - Writes directly to local temp storage -> Spark loads to Delta.
+1. **Native Spark** (Default in Databricks Notebooks/Jobs)
+   - Uses `createDataFrame` + micro-batch writes to Delta
    - **Fastest performance**. No Volume required.
 
-2. **SQL Streaming** (Remote / Local Laptop)
-   - Writes to Volume -> `COPY INTO` via SQL Warehouse.
+2. **SQL Streaming** (Remote / Local)
+   - Writes to Volume → `COPY INTO` via SQL Warehouse
    - Robust remote execution. Requires `staging_volume`.
 
 ```
-[In Notebook] ──▶ Spark Streaming ──▶ Local Temp ──▶ Delta Table
-                                         (No Volume)
+[In Notebook] ──▶ Spark createDataFrame ──▶ Delta Table (No Volume)
 
-[Remote Client] ──▶ SQL Streaming ──▶ Volume ──▶ COPY INTO ──▶ Delta Table
+[Remote]      ──▶ SQL Streaming ──▶ Volume ──▶ COPY INTO ──▶ Delta Table
 ```
 
 ## Requirements
@@ -114,9 +115,16 @@ dependencies = [
   "databricks-sdk==0.74.0",
   "databricks-sql-connector==4.2.2",
   "airbyte==0.34.0",
-  "delta-spark==3.2.0",
-  "pyarrow==19.0.0",
+  "pyarrow>=14.0.0",
 ]
+
+[project.optional-dependencies]
+local-spark = ["delta-spark>=3.0.0", "pyspark>=3.5.0"]
+```
+
+For local Spark + Delta development:
+```bash
+pip install brickbyte[local-spark]
 ```
 
 ## License

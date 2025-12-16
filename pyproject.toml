@@ -12,8 +12,7 @@ dependencies = [
   "databricks-sdk==0.74.0",
   "databricks-sql-connector==4.2.2",
   "airbyte==0.34.0",
-  "delta-spark==3.2.0",
-  "pyarrow==19.0.0",
+  "pyarrow>=14.0.0",
 ]
 
 [project.license]
@@ -23,6 +22,10 @@ file = "LICENSE.txt"
 dev = [
   "pytest",
   "ruff==0.6.4",
+]
+local-spark = [
+  "delta-spark>=3.2.0",
+  "pyspark>=3.5.0",
 ]
 
 [tool.ruff]
