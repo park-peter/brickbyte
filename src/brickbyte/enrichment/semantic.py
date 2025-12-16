@@ -125,20 +125,24 @@ class SemanticEnricher:
         return self._client
     
     def _get_column_samples(self, table_name: str) -> Dict[str, List[str]]:
-        """Get sample values for each column."""
+        """Get sample values for each column by parsing _airbyte_data JSON."""
         df = self.spark.sql(
-            f"SELECT * FROM {table_name} LIMIT {self.sample_rows}"
+            f"SELECT _airbyte_data FROM {table_name} LIMIT {self.sample_rows}"
         ).toPandas()
         
         samples = {}
-        for col in df.columns:
-            # Skip internal Airbyte columns
-            if col.startswith("_airbyte"):
+        
+        # Parse JSON from _airbyte_data to get actual columns
+        for _, row in df.iterrows():
+            try:
+                data = json.loads(row["_airbyte_data"])
+                for col, value in data.items():
+                    if col not in samples:
+                        samples[col] = []
+                    if value is not None and len(samples[col]) < 5:
+                        samples[col].append(str(value)[:100])
+            except (json.JSONDecodeError, KeyError, TypeError):
                 continue
-            
-            # Get unique non-null values
-            values = df[col].dropna().unique()[:5]
-            samples[col] = [str(v)[:100] for v in values]  # Truncate long values
         
         return samples
     
@@ -237,7 +241,8 @@ class SemanticEnricher:
         """
         Apply enrichment metadata to Unity Catalog.
         
-        Uses ALTER TABLE statements to set column comments and tags.
+        Since data is stored as JSON in _airbyte_data, we store field-level
+        metadata as table tags and set the table description.
         """
         logger.info(f"  Applying metadata to {enrichment.table_name}")
         
@@ -248,36 +253,47 @@ class SemanticEnricher:
                 self.spark.sql(
                     f"COMMENT ON TABLE {enrichment.table_name} IS '{escaped_desc}'"
                 )
+                logger.info("    ✓ Set table description")
             except Exception as e:
                 logger.warning(f"    Warning: Could not set table comment: {e}")
         
-        # Set column comments and tags
+        # Store field metadata as table tags (fields are inside JSON)
+        pii_fields = []
         for col in enrichment.columns:
+            if col.is_pii:
+                pii_fields.append(f"{col.column_name}:{col.pii_type or 'pii'}")
+        
+        if pii_fields:
             try:
-                # Set column description
-                if col.description:
-                    escaped_desc = col.description.replace("'", "''")
+                pii_value = ",".join(pii_fields)
+                self.spark.sql(
+                    f"ALTER TABLE {enrichment.table_name} "
+                    f"SET TAGS ('pii_fields' = '{pii_value}')"
+                )
+                logger.info(f"    ✓ Tagged PII fields: {pii_fields}")
+            except Exception as e:
+                logger.warning(f"    Warning: Could not set PII tags: {e}")
+        
+        # Store column descriptions as table property for reference
+        if enrichment.columns:
+            try:
+                # Build a summary of field descriptions
+                desc_summary = "; ".join(
+                    f"{c.column_name}: {c.description}"
+                    for c in enrichment.columns[:10]  # Limit to avoid huge properties
+                    if c.description
+                )
+                if desc_summary:
+                    escaped = desc_summary.replace("'", "''")[:1000]
                     self.spark.sql(
                         f"ALTER TABLE {enrichment.table_name} "
-                        f"ALTER COLUMN {col.column_name} COMMENT '{escaped_desc}'"
+                        f"SET TBLPROPERTIES ('brickbyte.field_descriptions' = '{escaped}')"
                     )
-                
-                # Set PII tag if detected
-                if col.is_pii:
-                    try:
-                        self.spark.sql(
-                            f"ALTER TABLE {enrichment.table_name} "
-                            f"ALTER COLUMN {col.column_name} "
-                            f"SET TAGS ('pii' = '{col.pii_type or 'true'}')"
-                        )
-                    except Exception:
-                        # Tags may not be supported in all environments
-                        pass
-                
+                    logger.info("    ✓ Stored field descriptions in table properties")
             except Exception as e:
-                logger.warning(f"    Warning: Could not update column {col.column_name}: {e}")
+                logger.warning(f"    Warning: Could not set field descriptions: {e}")
         
-        logger.info(f"    ✓ Applied metadata to catalog")
+        logger.info("    ✓ Applied metadata to catalog")
 
 
 def enrich_table(
