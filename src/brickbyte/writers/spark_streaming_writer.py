@@ -58,8 +58,6 @@ class SparkStreamingWriter(BaseWriter):
         self._buffer_counts: Dict[str, int] = {}
         self._buffer_sizes: Dict[str, int] = {}
         
-        # Use /tmp for staging - always writable on Databricks
-        # SPARK_LOCAL_DIRS often points to /local_disk0 which has permission restrictions
         self._temp_dir = os.path.join("/tmp", "brickbyte_spark_streaming")
         os.makedirs(self._temp_dir, exist_ok=True)
 
@@ -101,7 +99,7 @@ class SparkStreamingWriter(BaseWriter):
         return {
             "_airbyte_raw_id": str(uuid4()),
             "_airbyte_extracted_at": datetime.now(),
-            "_airbyte_data": json.dumps(record)
+            "_airbyte_data": json.dumps(record, default=str)
         }
 
     def write_record(self, stream_name: str, record: dict):

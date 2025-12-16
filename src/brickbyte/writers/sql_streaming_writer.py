@@ -139,7 +139,7 @@ class SQLStreamingWriter(BaseWriter):
         return {
             "_airbyte_raw_id": str(uuid4()),
             "_airbyte_extracted_at": datetime.now(),
-            "_airbyte_data": json.dumps(record)
+            "_airbyte_data": json.dumps(record, default=str)
         }
 
     def write_record(self, stream_name: str, record: dict):
