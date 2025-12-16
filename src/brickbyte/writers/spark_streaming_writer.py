@@ -58,7 +58,15 @@ class SparkStreamingWriter(BaseWriter):
         self._buffer_counts: Dict[str, int] = {}
         self._buffer_sizes: Dict[str, int] = {}
         
-        self._temp_dir = os.path.join("/tmp", "brickbyte_spark_streaming")
+        self._on_databricks = "DATABRICKS_RUNTIME_VERSION" in os.environ
+        if self._on_databricks:
+            # DBFS: notebook writes via FUSE, Spark reads via dbfs:/
+            self._temp_dir = "/dbfs/tmp/brickbyte_spark_streaming"
+            self._spark_temp_dir = "dbfs:/tmp/brickbyte_spark_streaming"
+        else:
+            # Local: both use same filesystem path
+            self._temp_dir = "/tmp/brickbyte_spark_streaming"
+            self._spark_temp_dir = "/tmp/brickbyte_spark_streaming"
         os.makedirs(self._temp_dir, exist_ok=True)
 
     @property
@@ -69,11 +77,12 @@ class SparkStreamingWriter(BaseWriter):
             self._spark = SparkSession.builder.getOrCreate()
         return self._spark
 
-    def _get_staging_dir(self, stream_name: str) -> str:
-        """Get local staging directory."""
-        stream_dir = os.path.join(self._temp_dir, stream_name)
-        os.makedirs(stream_dir, exist_ok=True)
-        return stream_dir
+    def _get_staging_dir(self, stream_name: str) -> tuple:
+        """Get staging directories."""
+        local_dir = os.path.join(self._temp_dir, stream_name)
+        spark_dir = f"{self._spark_temp_dir}/{stream_name}"
+        os.makedirs(local_dir, exist_ok=True)
+        return local_dir, spark_dir
 
     def table_exists(self, stream_name: str) -> bool:
         """Check if a table exists."""
@@ -127,18 +136,19 @@ class SparkStreamingWriter(BaseWriter):
         records = self._buffers[stream_name]
         batch_count = len(records)
         
-        staging_dir = self._get_staging_dir(stream_name)
+        local_dir, spark_dir = self._get_staging_dir(stream_name)
         filename = f"batch_{datetime.now().strftime('%Y%m%d%H%M%S%f')}.parquet"
-        file_path = os.path.join(staging_dir, filename)
+        local_path = os.path.join(local_dir, filename)
+        spark_path = f"{spark_dir}/{filename}"
         
         try:
-            # Write to local parquet
+            # Write to DBFS via FUSE mount
             table = pa.Table.from_pylist(records)
-            pq.write_table(table, file_path, compression='zstd')
+            pq.write_table(table, local_path, compression='zstd')
             
-            # Load via Spark and write to Delta
+            # Load via Spark (using dbfs:/ path) and write to Delta
             table_name = self.get_table_name(stream_name)
-            df = self.spark.read.parquet(file_path)
+            df = self.spark.read.parquet(spark_path)
             
             (df.write
                .format("delta")
@@ -154,7 +164,7 @@ class SparkStreamingWriter(BaseWriter):
         finally:
             # Cleanup staging file
             try:
-                os.remove(file_path)
+                os.remove(local_path)
             except OSError:
                 pass
         
