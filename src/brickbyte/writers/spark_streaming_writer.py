@@ -8,15 +8,10 @@ Uses micro-batch streaming for:
 """
 import json
 import logging
-import os
-import shutil
 import sys
 from datetime import datetime
 from typing import Dict, List, Optional
 from uuid import uuid4
-
-import pyarrow as pa
-import pyarrow.parquet as pq
 
 from brickbyte.writers.base import BaseWriter
 
@@ -57,17 +52,6 @@ class SparkStreamingWriter(BaseWriter):
         self._buffers: Dict[str, List[dict]] = {}
         self._buffer_counts: Dict[str, int] = {}
         self._buffer_sizes: Dict[str, int] = {}
-        
-        self._on_databricks = "DATABRICKS_RUNTIME_VERSION" in os.environ
-        if self._on_databricks:
-            # DBFS: notebook writes via FUSE, Spark reads via dbfs:/
-            self._temp_dir = "/dbfs/tmp/brickbyte_spark_streaming"
-            self._spark_temp_dir = "dbfs:/tmp/brickbyte_spark_streaming"
-        else:
-            # Local: both use same filesystem path
-            self._temp_dir = "/tmp/brickbyte_spark_streaming"
-            self._spark_temp_dir = "/tmp/brickbyte_spark_streaming"
-        os.makedirs(self._temp_dir, exist_ok=True)
 
     @property
     def spark(self):
@@ -76,13 +60,6 @@ class SparkStreamingWriter(BaseWriter):
             from pyspark.sql import SparkSession
             self._spark = SparkSession.builder.getOrCreate()
         return self._spark
-
-    def _get_staging_dir(self, stream_name: str) -> tuple:
-        """Get staging directories."""
-        local_dir = os.path.join(self._temp_dir, stream_name)
-        spark_dir = f"{self._spark_temp_dir}/{stream_name}"
-        os.makedirs(local_dir, exist_ok=True)
-        return local_dir, spark_dir
 
     def table_exists(self, stream_name: str) -> bool:
         """Check if a table exists."""
@@ -121,7 +98,9 @@ class SparkStreamingWriter(BaseWriter):
         transformed = self._transform_record(record)
         self._buffers[stream_name].append(transformed)
         self._buffer_counts[stream_name] += 1
-        self._buffer_sizes[stream_name] += sys.getsizeof(transformed.get("_airbyte_data", ""))
+        self._buffer_sizes[stream_name] += sys.getsizeof(
+            transformed.get("_airbyte_data", "")
+        )
         
         # Flush micro-batch when thresholds hit
         if (self._buffer_counts[stream_name] >= self.buffer_size_records or
@@ -135,38 +114,21 @@ class SparkStreamingWriter(BaseWriter):
 
         records = self._buffers[stream_name]
         batch_count = len(records)
-        
-        local_dir, spark_dir = self._get_staging_dir(stream_name)
-        filename = f"batch_{datetime.now().strftime('%Y%m%d%H%M%S%f')}.parquet"
-        local_path = os.path.join(local_dir, filename)
-        spark_path = f"{spark_dir}/{filename}"
+        table_name = self.get_table_name(stream_name)
         
         try:
-            # Write to DBFS via FUSE mount
-            table = pa.Table.from_pylist(records)
-            pq.write_table(table, local_path, compression='zstd')
-            
-            # Load via Spark (using dbfs:/ path) and write to Delta
-            table_name = self.get_table_name(stream_name)
-            df = self.spark.read.parquet(spark_path)
-            
+            df = self.spark.createDataFrame(records)
             (df.write
                .format("delta")
                .mode("append")
                .option("mergeSchema", "true")
                .saveAsTable(table_name))
             
-            logger.debug(f"Checkpoint: {batch_count} records written to {table_name}")
+            logger.debug("Wrote %d records to %s", batch_count, table_name)
             
         except Exception as e:
-            logger.error(f"Error writing micro-batch for {stream_name}: {e}")
+            logger.error("Error writing batch for %s: %s", stream_name, e)
             raise
-        finally:
-            # Cleanup staging file
-            try:
-                os.remove(local_path)
-            except OSError:
-                pass
         
         # Reset buffer
         self._buffers[stream_name] = []
@@ -178,12 +140,6 @@ class SparkStreamingWriter(BaseWriter):
         self._write_micro_batch(stream_name)
 
     def close(self):
-        """Flush all remaining buffers and clean up."""
-        for stream_name in list(self._buffers.keys()):
+        """Flush all remaining buffers."""
+        for stream_name in self._buffers:
             self.flush_stream(stream_name)
-        
-        try:
-            if os.path.exists(self._temp_dir):
-                shutil.rmtree(self._temp_dir)
-        except OSError:
-            pass
