@@ -154,6 +154,6 @@ bb_custom = BrickByte(secrets_scope="my-team-secrets")
 #     catalog="main",
 #     schema="bronze",
 #     enrich_metadata=True,
-#     enrich_model="databricks-meta-llama-3-1-70b-instruct",
+#     enrich_model="databricks-meta-llama-3-3-70b-instruct",
 # )
 # print(f"Enriched tables: {result.enriched_tables}")

@@ -93,7 +93,7 @@ class SemanticEnricher:
     
     def __init__(
         self,
-        model_name: str = "databricks-meta-llama-3-1-70b-instruct",
+        model_name: str = "databricks-meta-llama-3-3-70b-instruct",
         sample_rows: int = 50,
     ):
         """
@@ -306,7 +306,7 @@ def enrich_table(
     schema: str,
     table: str,
     apply_to_catalog: bool = True,
-    model_name: str = "databricks-meta-llama-3-1-70b-instruct",
+    model_name: str = "databricks-meta-llama-3-3-70b-instruct",
 ) -> TableEnrichment:
     """
     Convenience function to enrich a single table.

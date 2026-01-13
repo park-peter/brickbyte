@@ -251,25 +251,25 @@ print(f"Synced {result.records_written} records")
 
 # COMMAND ----------
 
-result = bb.sync(
-    source="source-microsoft-teams",
-    source_config={
-        "credentials": {
-            "auth_type": "Client",
-            "client_id": client_id,
-            "client_secret": client_secret,
-            "tenant_id": tenant_id,
-        },
-        "period": "D7",
-    },
-    streams=["users", "teams", "channels"],
-    catalog="",  # TODO: Set your Unity Catalog name
-    schema="",   # TODO: Set your target schema
-    enrich_metadata=True,
-    enrich_model="databricks-meta-llama-3-1-70b-instruct",
-)
+# result = bb.sync(
+#     source="source-microsoft-teams",
+#     source_config={
+#         "credentials": {
+#             "auth_type": "Client",
+#             "client_id": client_id,
+#             "client_secret": client_secret,
+#             "tenant_id": tenant_id,
+#         },
+#         "period": "D7",
+#     },
+#     streams=["users", "teams", "channels"],
+#     catalog="",  # TODO: Set your Unity Catalog name
+#     schema="",   # TODO: Set your target schema
+#     enrich_metadata=True,
+#     enrich_model="databricks-meta-llama-3-3-70b-instruct",
+# )
 
-print(f"Enriched tables: {result.enriched_tables}")
+# print(f"Enriched tables: {result.enriched_tables}")
 
 # COMMAND ----------
 

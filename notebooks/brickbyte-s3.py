@@ -340,25 +340,25 @@ print(f"Synced {result.records_written} records")
 
 # COMMAND ----------
 
-result = bb.sync(
-    source="source-s3",
-    source_config={
-        "bucket": "your-s3-bucket",
-        "aws_access_key_id": "YOUR_ACCESS_KEY_ID",
-        "aws_secret_access_key": "YOUR_SECRET_ACCESS_KEY",
-        "region_name": "us-east-1",
-        "streams": [
-            {
-                "name": "customer_data",
-                "globs": ["customers/**/*.csv"],
-                "format": {"filetype": "csv"},
-            }
-        ],
-    },
-    catalog="",  # TODO: Set your Unity Catalog name
-    schema="",   # TODO: Set your target schema
-    enrich_metadata=True,
-    enrich_model="databricks-meta-llama-3-1-70b-instruct",
-)
+# result = bb.sync(
+#     source="source-s3",
+#     source_config={
+#         "bucket": "your-s3-bucket",
+#         "aws_access_key_id": "YOUR_ACCESS_KEY_ID",
+#         "aws_secret_access_key": "YOUR_SECRET_ACCESS_KEY",
+#         "region_name": "us-east-1",
+#         "streams": [
+#             {
+#                 "name": "customer_data",
+#                 "globs": ["customers/**/*.csv"],
+#                 "format": {"filetype": "csv"},
+#             }
+#         ],
+#     },
+#     catalog="",  # TODO: Set your Unity Catalog name
+#     schema="",   # TODO: Set your target schema
+#     enrich_metadata=True,
+#     enrich_model="databricks-meta-llama-3-3-70b-instruct",
+# )
 
-print(f"Enriched tables: {result.enriched_tables}")
+# print(f"Enriched tables: {result.enriched_tables}")

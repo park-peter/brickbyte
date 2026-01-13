@@ -181,26 +181,26 @@ print(f"Synced {result.records_written} records")
 # COMMAND ----------
 
 # Sync with automatic AI-powered metadata generation
-result = bb.sync(
-    source="source-google-drive",
-    source_config={
-        "folder_url": folder_link,
-        "credentials": {
-            "auth_type": "Service",
-            "service_account_info": service_account_key,
-        },
-        "streams": [
-            {
-                "name": "csv_with_enrichment",
-                "globs": ["**/*.csv"],
-                "format": {"filetype": "csv"},
-            }
-        ],
-    },
-    catalog="",  # TODO: Set your Unity Catalog name
-    schema="",   # TODO: Set your target schema
-    enrich_metadata=True,
-    enrich_model="databricks-meta-llama-3-1-70b-instruct",  # Or your available endpoint
-)
+# result = bb.sync(
+#     source="source-google-drive",
+#     source_config={
+#         "folder_url": folder_link,
+#         "credentials": {
+#             "auth_type": "Service",
+#             "service_account_info": service_account_key,
+#         },
+#         "streams": [
+#             {
+#                 "name": "csv_with_enrichment",
+#                 "globs": ["**/*.csv"],
+#                 "format": {"filetype": "csv"},
+#             }
+#         ],
+#     },
+#     catalog="",  # TODO: Set your Unity Catalog name
+#     schema="",   # TODO: Set your target schema
+#     enrich_metadata=True,
+#     enrich_model="databricks-meta-llama-3-3-70b-instruct",
+# )
 
-print(f"Enriched tables: {result.enriched_tables}")
+# print(f"Enriched tables: {result.enriched_tables}")

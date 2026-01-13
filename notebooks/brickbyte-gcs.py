@@ -230,23 +230,23 @@ print(f"Synced {result.records_written} records")
 
 # COMMAND ----------
 
-result = bb.sync(
-    source="source-gcs",
-    source_config={
-        "gcs_bucket": bucket_name,
-        "service_account": service_account_key,
-        "streams": [
-            {
-                "name": "customer_data",
-                "globs": ["customers/**/*.csv"],
-                "format": {"filetype": "csv"},
-            }
-        ],
-    },
-    catalog="",  # TODO: Set your Unity Catalog name
-    schema="",   # TODO: Set your target schema
-    enrich_metadata=True,
-    enrich_model="databricks-meta-llama-3-1-70b-instruct",
-)
+# result = bb.sync(
+#     source="source-gcs",
+#     source_config={
+#         "gcs_bucket": bucket_name,
+#         "service_account": service_account_key,
+#         "streams": [
+#             {
+#                 "name": "customer_data",
+#                 "globs": ["customers/**/*.csv"],
+#                 "format": {"filetype": "csv"},
+#             }
+#         ],
+#     },
+#     catalog="",  # TODO: Set your Unity Catalog name
+#     schema="",   # TODO: Set your target schema
+#     enrich_metadata=True,
+#     enrich_model="databricks-meta-llama-3-3-70b-instruct",
+# )
 
-print(f"Enriched tables: {result.enriched_tables}")
+# print(f"Enriched tables: {result.enriched_tables}")

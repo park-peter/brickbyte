@@ -248,7 +248,7 @@ class BrickByte:
             streams: List of streams to sync. None = all streams (default)
             mode: Write mode (currently supports "overwrite" and "append")
             enrich_metadata: If True, use AI to generate column descriptions
-            enrich_model: Foundation Model endpoint for enrichment (default: databricks-meta-llama-3-1-70b-instruct)
+            enrich_model: Foundation Model endpoint for enrichment (default: databricks-meta-llama-3-3-70b-instruct)
             warehouse_id: SQL warehouse ID (optional, auto-discovered)
             source_install: Override source installation (e.g., custom git URL)
             cleanup: Whether to cleanup venvs after sync (default: True)
@@ -337,7 +337,7 @@ class BrickByte:
                 logger.info("Enriching metadata with AI...")
                 from brickbyte.enrichment import enrich_table
 
-                model = enrich_model or "databricks-meta-llama-3-1-70b-instruct"
+                model = enrich_model or "databricks-meta-llama-3-3-70b-instruct"
                 for stream_name in selected:
                     try:
                         enrich_table(

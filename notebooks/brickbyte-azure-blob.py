@@ -200,27 +200,27 @@ print(f"Synced {result.records_written} records from streams: {result.streams_sy
 
 # COMMAND ----------
 
-result = bb.sync(
-    source="source-azure-blob-storage",
-    source_config={
-        "azure_blob_storage_account_name": "your_storage_account",
-        "azure_blob_storage_container_name": "your_container",
-        "credentials": {
-            "auth_type": "storage_account_key",
-            "azure_blob_storage_account_key": "YOUR_KEY",
-        },
-        "streams": [
-            {
-                "name": "customer_data",
-                "globs": ["customers/**/*.csv"],
-                "format": {"filetype": "csv"},
-            }
-        ],
-    },
-    catalog="",  # TODO: Set your Unity Catalog name
-    schema="",   # TODO: Set your target schema
-    enrich_metadata=True,
-    enrich_model="databricks-meta-llama-3-1-70b-instruct",
-)
+# result = bb.sync(
+#     source="source-azure-blob-storage",
+#     source_config={
+#         "azure_blob_storage_account_name": "your_storage_account",
+#         "azure_blob_storage_container_name": "your_container",
+#         "credentials": {
+#             "auth_type": "storage_account_key",
+#             "azure_blob_storage_account_key": "YOUR_KEY",
+#         },
+#         "streams": [
+#             {
+#                 "name": "customer_data",
+#                 "globs": ["customers/**/*.csv"],
+#                 "format": {"filetype": "csv"},
+#             }
+#         ],
+#     },
+#     catalog="",  # TODO: Set your Unity Catalog name
+#     schema="",   # TODO: Set your target schema
+#     enrich_metadata=True,
+#     enrich_model="databricks-meta-llama-3-3-70b-instruct",
+# )
 
-print(f"Enriched tables: {result.enriched_tables}")
+# print(f"Enriched tables: {result.enriched_tables}")
