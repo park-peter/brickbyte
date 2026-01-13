@@ -157,9 +157,14 @@ class SemanticEnricher:
     def _call_foundation_model(self, prompt: str) -> str:
         """Call the Foundation Model API."""
         try:
+            from databricks.sdk.service.serving import (
+                ChatMessage,
+                ChatMessageRole,
+            )
+            
             response = self.client.serving_endpoints.query(
                 name=self.model_name,
-                messages=[{"role": "user", "content": prompt}],
+                messages=[ChatMessage(role=ChatMessageRole.USER, content=prompt)],
             )
             return response.choices[0].message.content
         except Exception as e:

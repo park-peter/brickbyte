@@ -9,8 +9,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional
 
-import virtualenv
-
 from brickbyte.types import Source
 
 # Configure logging
@@ -55,6 +53,7 @@ class VirtualEnvManager:
         self.env_dir = env_dir
 
     def create_virtualenv(self):
+        import virtualenv
         virtualenv.cli_run([self.env_dir])
 
     def install_airbyte_source(
@@ -82,11 +81,18 @@ class BrickByte:
     
     Uses a streaming architecture to bypass local disk storage and
     write directly to Unity Catalog Volumes.
+    
+    Supports automatic credential discovery from Databricks Secrets:
+        - Default scope: "brickbyte"
+        - Key convention: "{source-name}/{field}" (e.g., "source-s3/aws_access_key_id")
+        - Optional YAML profiles for credential reuse across sources
     """
 
     def __init__(
         self, 
         base_venv_directory: Optional[str] = None,
+        secrets_scope: str = "brickbyte",
+        profiles: Optional[str] = None,
     ):
         """
         Initialize BrickByte.
@@ -94,9 +100,20 @@ class BrickByte:
         Args:
             base_venv_directory: Directory to store virtual environments.
                                 Defaults to user's home directory.
+            secrets_scope: Databricks Secrets scope for credential discovery
+                          (default: "brickbyte")
+            profiles: Optional path to YAML profiles file for advanced
+                     credential configuration (e.g., credential reuse)
         """
         self._base_venv_directory = base_venv_directory or str(Path.home())
         self._source_env_managers: Dict[str, VirtualEnvManager] = {}
+        
+        # Initialize credential resolver
+        from brickbyte.credentials import CredentialResolver
+        self._credential_resolver = CredentialResolver(
+            secrets_scope=secrets_scope,
+            profiles_path=profiles,
+        )
 
     def _setup_source(self, source: str, source_install: Optional[str] = None):
         """Install source connector in isolated venv."""
@@ -165,6 +182,9 @@ class BrickByte:
 
         from brickbyte.preview import PreviewEngine
 
+        # Merge discovered credentials into source_config
+        merged_config = self._credential_resolver.merge_credentials(source, source_config)
+
         try:
             # Setup source
             logger.info(f"Setting up {source}...")
@@ -173,7 +193,7 @@ class BrickByte:
             # Configure source
             ab_source = ab.get_source(
                 source,
-                config=source_config,
+                config=merged_config,
                 local_executable=self._get_source_exec_path(source),
             )
             ab_source.check()
@@ -209,6 +229,7 @@ class BrickByte:
         streams: Optional[List[str]] = None,
         mode: str = "overwrite",
         enrich_metadata: bool = False,
+        enrich_model: Optional[str] = None,
         warehouse_id: Optional[str] = None,
         source_install: Optional[str] = None,
         cleanup: bool = True,
@@ -227,6 +248,7 @@ class BrickByte:
             streams: List of streams to sync. None = all streams (default)
             mode: Write mode (currently supports "overwrite" and "append")
             enrich_metadata: If True, use AI to generate column descriptions
+            enrich_model: Foundation Model endpoint for enrichment (default: databricks-meta-llama-3-1-70b-instruct)
             warehouse_id: SQL warehouse ID (optional, auto-discovered)
             source_install: Override source installation (e.g., custom git URL)
             cleanup: Whether to cleanup venvs after sync (default: True)
@@ -243,6 +265,9 @@ class BrickByte:
         # Validate parameters
         self._validate_sync_params(mode, staging_volume)
 
+        # Merge discovered credentials into source_config
+        merged_config = self._credential_resolver.merge_credentials(source, source_config)
+
         try:
             # Setup source connector
             logger.info(f"Setting up {source}...")
@@ -252,7 +277,7 @@ class BrickByte:
             logger.info(f"Configuring {source}...")
             ab_source = ab.get_source(
                 source,
-                config=source_config,
+                config=merged_config,
                 local_executable=self._get_source_exec_path(source),
             )
 
@@ -312,6 +337,7 @@ class BrickByte:
                 logger.info("Enriching metadata with AI...")
                 from brickbyte.enrichment import enrich_table
 
+                model = enrich_model or "databricks-meta-llama-3-1-70b-instruct"
                 for stream_name in selected:
                     try:
                         enrich_table(
@@ -319,6 +345,7 @@ class BrickByte:
                             schema=schema,
                             table=stream_name,
                             apply_to_catalog=True,
+                            model_name=model,
                         )
                         enriched_tables.append(stream_name)
                     except Exception as e:
@@ -339,6 +366,27 @@ class BrickByte:
         for manager in self._source_env_managers.values():
             manager.delete_virtualenv()
         self._source_env_managers.clear()
+
+    def list_configured_sources(self) -> List[str]:
+        """
+        List all sources that have credentials configured.
+        
+        Returns:
+            List of source names with available credentials
+        """
+        return self._credential_resolver.list_available_sources()
+
+    def validate_credentials(self, source: str) -> bool:
+        """
+        Check if credentials are configured for a source.
+        
+        Args:
+            source: Source connector name (e.g., "source-s3")
+            
+        Returns:
+            True if credentials were found
+        """
+        return self._credential_resolver.validate(source)
 
 
 __all__ = ["BrickByte", "SyncResult", "Source"]
