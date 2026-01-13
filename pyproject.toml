@@ -1,22 +1,45 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 [project]
 name = "brickbyte"
 version = "0.1.0"
-description = "Library for PyAirbyte to run on Databricks serverless compute"
+description = "Sync data from Airbyte sources to Databricks Unity Catalog with streaming architecture"
 authors = [
     { name="Sri Tikkireddy", email="sri.tikkireddy@databricks.com" },
+    { name="Peter Park", email="peter.park@databricks.com" },
 ]
 readme = "README.md"
 requires-python = ">=3.10"
+keywords = ["databricks", "airbyte", "etl", "data-engineering", "unity-catalog", "delta-lake"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Database",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
 dependencies = [
   "virtualenv",
-  "databricks-sdk==0.74.0",
-  "databricks-sql-connector==4.2.2",
-  "airbyte==0.34.0",
+  "databricks-sdk>=0.74.0",
+  "databricks-sql-connector>=4.2.2",
+  "airbyte>=0.34.0",
   "pyarrow>=14.0.0",
 ]
 
+[project.urls]
+Homepage = "https://github.com/park-peter/brickbyte"
+Repository = "https://github.com/park-peter/brickbyte"
+Issues = "https://github.com/park-peter/brickbyte/issues"
+
 [project.license]
-file = "LICENSE.txt"
+file = "LICENSE"
 
 [project.optional-dependencies]
 dev = [
@@ -27,6 +50,9 @@ local-spark = [
   "delta-spark>=3.2.0",
   "pyspark>=3.5.0",
 ]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/brickbyte"]
 
 [tool.ruff]
 line-length = 100
