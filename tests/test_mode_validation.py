@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from brickbyte import BrickByte
+from brickbyte import Brickbyte
 
 
 class TestModeValidation:
@@ -13,7 +13,7 @@ class TestModeValidation:
 
     @pytest.fixture
     def brickbyte(self, tmp_path):
-        return BrickByte(base_venv_directory=str(tmp_path))
+        return Brickbyte(base_venv_directory=str(tmp_path))
 
     def test_append_mode_valid(self, brickbyte):
         """Test that append mode is valid."""
@@ -53,7 +53,7 @@ class TestOverwriteMode:
 
     @pytest.fixture
     def brickbyte(self, tmp_path):
-        return BrickByte(base_venv_directory=str(tmp_path))
+        return Brickbyte(base_venv_directory=str(tmp_path))
 
     def test_overwrite_drops_table_before_streaming(self, brickbyte, mock_airbyte):
         """Test that overwrite mode calls drop_table before streaming."""
@@ -116,7 +116,7 @@ class TestSyncModeIntegration:
 
     @pytest.fixture
     def brickbyte(self, tmp_path):
-        return BrickByte(base_venv_directory=str(tmp_path))
+        return Brickbyte(base_venv_directory=str(tmp_path))
 
     def test_default_mode_is_overwrite(self, brickbyte, mock_airbyte):
         """Test that default mode is overwrite."""

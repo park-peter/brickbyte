@@ -1,5 +1,5 @@
 """
-Spark Streaming writer for BrickByte using native Databricks/Spark execution.
+Spark Streaming writer for Brickbyte using native Databricks/Spark execution.
 
 Uses micro-batch streaming for:
 - Bounded memory usage (flushes at configurable thresholds)
@@ -34,6 +34,7 @@ class SparkStreamingWriter(BaseWriter):
         schema: str,
         buffer_size_records: int = 50000,
         buffer_size_mb: int = 100,
+        flatten: bool = False,
     ):
         """
         Initialize Spark Streaming Writer.
@@ -43,10 +44,12 @@ class SparkStreamingWriter(BaseWriter):
             schema: Target schema name
             buffer_size_records: Records per micro-batch (default: 50k)
             buffer_size_mb: Max batch size in MB (default: 100MB)
+            flatten: If True, flatten record fields into columns (default: False)
         """
         super().__init__(catalog, schema)
         self.buffer_size_records = buffer_size_records
         self.buffer_size_bytes = buffer_size_mb * 1024 * 1024
+        self.flatten = flatten
 
         self._spark = None
         self._buffers: Dict[str, List[dict]] = {}
@@ -81,12 +84,20 @@ class SparkStreamingWriter(BaseWriter):
         self.spark.sql(f"DROP TABLE IF EXISTS {table_name}")
 
     def _transform_record(self, record: dict) -> dict:
-        """Add Airbyte metadata fields."""
-        return {
-            "_airbyte_raw_id": str(uuid4()),
-            "_airbyte_extracted_at": datetime.now(),
-            "_airbyte_data": json.dumps(record, default=str)
-        }
+        """Transform record based on flatten mode."""
+        if self.flatten:
+            # Flattened: all fields as top-level columns + metadata
+            transformed = dict(record)
+            transformed["_id"] = str(uuid4())
+            transformed["_extracted_at"] = datetime.now()
+            return transformed
+        else:
+            # Raw: 3 columns with JSON blob
+            return {
+                "id": str(uuid4()),
+                "extracted_at": datetime.now(),
+                "data": json.dumps(record, default=str)
+            }
 
     def write_record(self, stream_name: str, record: dict):
         """Buffer a single record."""
@@ -98,9 +109,12 @@ class SparkStreamingWriter(BaseWriter):
         transformed = self._transform_record(record)
         self._buffers[stream_name].append(transformed)
         self._buffer_counts[stream_name] += 1
-        self._buffer_sizes[stream_name] += sys.getsizeof(
-            transformed.get("_airbyte_data", "")
-        )
+        
+        # Estimate size based on data field or full record
+        if self.flatten:
+            self._buffer_sizes[stream_name] += sys.getsizeof(str(transformed))
+        else:
+            self._buffer_sizes[stream_name] += sys.getsizeof(transformed.get("data", ""))
         
         # Flush micro-batch when thresholds hit
         if (self._buffer_counts[stream_name] >= self.buffer_size_records or

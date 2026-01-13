@@ -1,14 +1,15 @@
-# BrickByte 🧱
+# Brickbyte 🧱
 
-**Sync data from Airbyte's 600+ connectors to Databricks with Streaming performance.**
+**Sync data from 600+ source connectors to Databricks with streaming performance.**
 
-BrickByte wraps [PyAirbyte](https://github.com/airbytehq/airbyte) to extract data from any source and streams it directly to Databricks Unity Catalog using Volumes and `COPY INTO`.
+Brickbyte wraps [PyAirbyte](https://github.com/airbytehq/airbyte) to extract data from any source and streams it directly to Databricks Unity Catalog.
 
 ## Features
 
 - **600+ Sources** - All Airbyte connectors work out of the box
 - **Streaming Architecture** - Bypasses local disk, no OOM issues
 - **High Performance** - Uses Unity Catalog Volumes and `COPY INTO`
+- **Flexible Output** - Raw JSON or flattened columns
 - **AI Enrichment** - Auto-generate table descriptions and detect PII via Foundation Models
 - **Preview** - See what schema changes will occur before syncing
 - **Simple API** - One-line sync
@@ -22,17 +23,41 @@ dbutils.library.restartPython()
 ```
 
 ```python
-from brickbyte import BrickByte
+from brickbyte import Brickbyte
 
-bb = BrickByte()
+bb = Brickbyte()
 bb.sync(
     source="source-faker",
     source_config={"count": 100},
     catalog="main",
     schema="bronze",
-    # staging_volume="main.staging.vol", # Optional if using Native Spark (in Notebook)
 )
 ```
+
+## Output Formats
+
+### Raw Mode (Default)
+Stores data as JSON for schema flexibility:
+
+| id | extracted_at | data |
+|----|--------------|------|
+| abc-123 | 2026-01-13 10:00:00 | {"displayName": "John", "email": "john@..."} |
+
+Query with JSON syntax:
+```sql
+SELECT data:displayName::STRING as name FROM my_table
+```
+
+### Flattened Mode
+Expands all fields into columns:
+
+```python
+bb.sync(..., flatten=True)
+```
+
+| displayName | email | _id | _extracted_at |
+|-------------|-------|-----|---------------|
+| John | john@... | abc-123 | 2026-01-13 10:00:00 |
 
 ## Examples
 
@@ -51,6 +76,18 @@ bb.sync(
 )
 ```
 
+### Flattened Output
+
+```python
+bb.sync(
+    source="source-salesforce",
+    source_config={...},
+    catalog="main",
+    schema="bronze",
+    flatten=True,  # All fields as top-level columns
+)
+```
+
 ### With AI Metadata Enrichment
 
 ```python
@@ -59,8 +96,7 @@ result = bb.sync(
     source_config={...},
     catalog="main",
     schema="bronze",
-    staging_volume="main.staging.brickbyte_volume",
-    enrich_metadata=True,  # AI-powered metadata enrichment
+    enrich_metadata=True,
 )
 # Tables get:
 #   - AI-generated table description (COMMENT ON TABLE)
@@ -83,7 +119,7 @@ print(preview)
 ## Architecture
 
 ### Hybrid Mode
-BrickByte automatically selects the best write strategy:
+Brickbyte automatically selects the best write strategy:
 
 1. **Native Spark** (Default in Databricks Notebooks/Jobs)
    - Uses `createDataFrame` + micro-batch writes to Delta
@@ -112,9 +148,9 @@ BrickByte automatically selects the best write strategy:
 [project]
 dependencies = [
   "virtualenv",
-  "databricks-sdk==0.74.0",
-  "databricks-sql-connector==4.2.2",
-  "airbyte==0.34.0",
+  "databricks-sdk>=0.74.0",
+  "databricks-sql-connector>=4.2.2",
+  "airbyte>=0.34.0",
   "pyarrow>=14.0.0",
 ]
 
@@ -129,4 +165,4 @@ pip install brickbyte[local-spark]
 
 ## License
 
-MIT License
+Apache-2.0 License

@@ -1,14 +1,14 @@
 """
-Verification tests for BrickByte functionalities (Streaming Only).
+Verification tests for Brickbyte functionalities (Streaming Only).
 """
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from brickbyte import BrickByte
+from brickbyte import Brickbyte
 
 
-class TestBrickByteFunctional:
+class TestBrickbyteFunctional:
     
     @pytest.fixture
     def mock_airbyte(self):
@@ -19,7 +19,7 @@ class TestBrickByteFunctional:
 
     @pytest.fixture
     def brickbyte(self, tmp_path):
-        return BrickByte(base_venv_directory=str(tmp_path))
+        return Brickbyte(base_venv_directory=str(tmp_path))
 
     def test_sync_streaming_default(self, brickbyte, mock_airbyte):
         """Test the sync method with default streaming behavior."""

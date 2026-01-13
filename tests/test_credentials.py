@@ -260,30 +260,30 @@ def _has_virtualenv():
 
 
 @pytest.mark.skipif(not _has_virtualenv(), reason="virtualenv not installed")
-class TestBrickByteCredentialIntegration:
-    """Tests for BrickByte credential integration."""
+class TestBrickbyteCredentialIntegration:
+    """Tests for Brickbyte credential integration."""
 
     def test_brickbyte_init_with_default_scope(self):
-        """Test BrickByte initializes credential resolver with default scope."""
-        from brickbyte import BrickByte
+        """Test Brickbyte initializes credential resolver with default scope."""
+        from brickbyte import Brickbyte
         
-        bb = BrickByte()
+        bb = Brickbyte()
         
         assert bb._credential_resolver.secrets_scope == "brickbyte"
 
     def test_brickbyte_init_with_custom_scope(self):
-        """Test BrickByte with custom secrets scope."""
-        from brickbyte import BrickByte
+        """Test Brickbyte with custom secrets scope."""
+        from brickbyte import Brickbyte
         
-        bb = BrickByte(secrets_scope="my-custom-scope")
+        bb = Brickbyte(secrets_scope="my-custom-scope")
         
         assert bb._credential_resolver.secrets_scope == "my-custom-scope"
 
     def test_list_configured_sources(self):
         """Test listing configured sources."""
-        from brickbyte import BrickByte
+        from brickbyte import Brickbyte
         
-        bb = BrickByte()
+        bb = Brickbyte()
         bb._credential_resolver._cache = {
             "source-s3": {"key": "value"},
         }
@@ -305,9 +305,9 @@ class TestBrickByteCredentialIntegration:
 
     def test_validate_credentials(self):
         """Test credential validation."""
-        from brickbyte import BrickByte
+        from brickbyte import Brickbyte
         
-        bb = BrickByte()
+        bb = Brickbyte()
         bb._credential_resolver._cache["source-s3"] = {"key": "value"}
         
         assert bb.validate_credentials("source-s3") is True

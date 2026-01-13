@@ -125,18 +125,36 @@ class SemanticEnricher:
         return self._client
     
     def _get_column_samples(self, table_name: str) -> Dict[str, List[str]]:
-        """Get sample values for each column by parsing _airbyte_data JSON."""
+        """Get sample values for each column by parsing data JSON column."""
+        # Try new column name first, fall back to legacy name
+        schema = self.spark.table(table_name).schema
+        col_names = [f.name for f in schema.fields]
+        
+        if "data" in col_names:
+            data_col = "data"
+        elif "_airbyte_data" in col_names:
+            data_col = "_airbyte_data"
+        else:
+            # Flattened mode - sample all columns directly
+            df = self.spark.sql(
+                f"SELECT * FROM {table_name} LIMIT {self.sample_rows}"
+            ).toPandas()
+            samples = {}
+            for col in df.columns:
+                if not col.startswith("_"):
+                    vals = df[col].dropna().astype(str).head(5).tolist()
+                    samples[col] = [v[:100] for v in vals]
+            return samples
+        
         df = self.spark.sql(
-            f"SELECT _airbyte_data FROM {table_name} LIMIT {self.sample_rows}"
+            f"SELECT {data_col} FROM {table_name} LIMIT {self.sample_rows}"
         ).toPandas()
         
         samples = {}
-        
-        # Parse JSON from _airbyte_data to get actual columns
         for _, row in df.iterrows():
             try:
-                data = json.loads(row["_airbyte_data"])
-                for col, value in data.items():
+                record = json.loads(row[data_col])
+                for col, value in record.items():
                     if col not in samples:
                         samples[col] = []
                     if value is not None and len(samples[col]) < 5:
@@ -246,7 +264,7 @@ class SemanticEnricher:
         """
         Apply enrichment metadata to Unity Catalog.
         
-        Since data is stored as JSON in _airbyte_data, we store field-level
+        Since data may be stored as JSON in data column, we store field-level
         metadata as table tags and set the table description.
         """
         logger.info(f"  Applying metadata to {enrichment.table_name}")

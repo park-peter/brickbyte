@@ -1,5 +1,5 @@
 """
-SQL Streaming writer for BrickByte using PyArrow buffering and COPY INTO.
+SQL Streaming writer for Brickbyte using PyArrow buffering and COPY INTO.
 
 Uses micro-batch streaming for:
 - Bounded memory usage (flushes at configurable thresholds)
@@ -42,6 +42,7 @@ class SQLStreamingWriter(BaseWriter):
         access_token: str,
         buffer_size_records: int = 50000,
         buffer_size_mb: int = 100,
+        flatten: bool = False,
     ):
         """
         Initialize SQL Streaming Writer.
@@ -55,12 +56,14 @@ class SQLStreamingWriter(BaseWriter):
             access_token: Databricks access token
             buffer_size_records: Records per micro-batch (default: 50k)
             buffer_size_mb: Max batch size in MB (default: 100MB)
+            flatten: If True, flatten record fields into columns (default: False)
         """
         super().__init__(catalog, schema)
         self.staging_volume = staging_volume
         self.server_hostname = server_hostname
         self.http_path = http_path
         self._access_token = access_token
+        self.flatten = flatten
         
         self.buffer_size_records = buffer_size_records
         self.buffer_size_bytes = buffer_size_mb * 1024 * 1024
@@ -68,7 +71,7 @@ class SQLStreamingWriter(BaseWriter):
         self._connection = None
         self._buffers: Dict[str, List[dict]] = {}
         self._buffer_counts: Dict[str, int] = {}
-        self._buffer_sizes: Dict[str, int] = {}  # Track approx byte size
+        self._buffer_sizes: Dict[str, int] = {}
         
         parts = self.staging_volume.split(".")
         if len(parts) != 3:
@@ -135,12 +138,20 @@ class SQLStreamingWriter(BaseWriter):
         self._execute(f"DROP TABLE IF EXISTS {table_name}")
 
     def _transform_record(self, record: dict) -> dict:
-        """Add Airbyte metadata fields."""
-        return {
-            "_airbyte_raw_id": str(uuid4()),
-            "_airbyte_extracted_at": datetime.now(),
-            "_airbyte_data": json.dumps(record, default=str)
-        }
+        """Transform record based on flatten mode."""
+        if self.flatten:
+            # Flattened: all fields as top-level columns + metadata
+            transformed = dict(record)
+            transformed["_id"] = str(uuid4())
+            transformed["_extracted_at"] = datetime.now()
+            return transformed
+        else:
+            # Raw: 3 columns with JSON blob
+            return {
+                "id": str(uuid4()),
+                "extracted_at": datetime.now(),
+                "data": json.dumps(record, default=str)
+            }
 
     def write_record(self, stream_name: str, record: dict):
         """Buffer a single record."""
@@ -152,7 +163,12 @@ class SQLStreamingWriter(BaseWriter):
         transformed = self._transform_record(record)
         self._buffers[stream_name].append(transformed)
         self._buffer_counts[stream_name] += 1
-        self._buffer_sizes[stream_name] += sys.getsizeof(transformed.get("_airbyte_data", ""))
+        
+        # Estimate size based on data field or full record
+        if self.flatten:
+            self._buffer_sizes[stream_name] += sys.getsizeof(str(transformed))
+        else:
+            self._buffer_sizes[stream_name] += sys.getsizeof(transformed.get("data", ""))
         
         # Check both thresholds
         if (self._buffer_counts[stream_name] >= self.buffer_size_records or
@@ -177,14 +193,17 @@ class SQLStreamingWriter(BaseWriter):
             
             table_name = self.get_table_name(stream_name)
             
-            create_query = f"""
-            CREATE TABLE IF NOT EXISTS {table_name} (
-                _airbyte_raw_id STRING,
-                _airbyte_extracted_at TIMESTAMP,
-                _airbyte_data STRING
-            )
-            """
-            self._execute(create_query)
+            # For raw mode, create table with known schema
+            # For flatten mode, rely on COPY INTO with mergeSchema
+            if not self.flatten:
+                create_query = f"""
+                CREATE TABLE IF NOT EXISTS {table_name} (
+                    id STRING,
+                    extracted_at TIMESTAMP,
+                    data STRING
+                )
+                """
+                self._execute(create_query)
             
             copy_query = f"""
             COPY INTO {table_name}
@@ -206,19 +225,15 @@ class SQLStreamingWriter(BaseWriter):
         self._buffer_counts[stream_name] = 0
         self._buffer_sizes[stream_name] = 0
 
-
-
     def close(self):
         """Flush all remaining buffers and close connection."""
         for stream_name in list(self._buffers.keys()):
             self.flush_stream(stream_name)
 
             try:
-                # Cleanup staging directory if empty
                 staging_dir = self._get_staging_dir(stream_name)
                 if os.path.exists(staging_dir):
-                     # os.rmdir only works if empty
-                     os.rmdir(staging_dir)
+                    os.rmdir(staging_dir)
             except Exception:
                 pass
             

@@ -1,5 +1,5 @@
 """
-BrickByte Writers Module.
+Brickbyte Writers Module.
 """
 import logging
 from typing import Optional, Union
@@ -18,6 +18,7 @@ def create_streaming_writer(
     force_sql: bool = False,
     buffer_size_records: int = 50000,
     buffer_size_mb: int = 100,
+    flatten: bool = False,
 ) -> Union[SparkStreamingWriter, SQLStreamingWriter]:
     """
     Create a streaming writer based on environment.
@@ -44,6 +45,7 @@ def create_streaming_writer(
             schema=schema,
             buffer_size_records=buffer_size_records,
             buffer_size_mb=buffer_size_mb,
+            flatten=flatten,
         )
     
     # 2. Fallback to SQL Writer
@@ -87,6 +89,7 @@ def create_streaming_writer(
         access_token=access_token,
         buffer_size_records=buffer_size_records,
         buffer_size_mb=buffer_size_mb,
+        flatten=flatten,
     )
 
 

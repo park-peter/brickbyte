@@ -1,5 +1,5 @@
 """
-BrickByte - Bridge Airbyte's 600+ connectors directly into Databricks.
+Brickbyte - Sync data from 600+ sources directly into Databricks.
 """
 import logging
 import os
@@ -16,7 +16,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
-# Configure logging - suppress noisy third-party DEBUG/INFO logs
+# Suppress noisy third-party DEBUG/INFO logs
 logging.getLogger().setLevel(logging.WARNING)
 
 _noisy_loggers = [
@@ -43,6 +43,7 @@ class SyncResult:
 
     records_written: int
     streams_synced: List[str]
+    failed_streams: List[str] = field(default_factory=list)
     enriched_tables: List[str] = field(default_factory=list)
 
 
@@ -56,7 +57,7 @@ class VirtualEnvManager:
         import virtualenv
         virtualenv.cli_run([self.env_dir])
 
-    def install_airbyte_source(
+    def install_source(
         self, source: str, override_install: Optional[str] = None
     ):
         library = override_install or f"airbyte-{source}"
@@ -75,12 +76,12 @@ class VirtualEnvManager:
         return os.path.join(self.env_dir, "bin")
 
 
-class BrickByte:
+class Brickbyte:
     """
-    BrickByte - Sync data from any Airbyte source to Databricks.
+    Brickbyte - Sync data from any source connector to Databricks.
     
     Uses a streaming architecture to bypass local disk storage and
-    write directly to Unity Catalog Volumes.
+    write directly to Unity Catalog.
     
     Supports automatic credential discovery from Databricks Secrets:
         - Default scope: "brickbyte"
@@ -95,7 +96,7 @@ class BrickByte:
         profiles: Optional[str] = None,
     ):
         """
-        Initialize BrickByte.
+        Initialize Brickbyte.
 
         Args:
             base_venv_directory: Directory to store virtual environments.
@@ -123,7 +124,7 @@ class BrickByte:
         path = os.path.join(self._base_venv_directory, f"brickbyte-{source}")
         manager = VirtualEnvManager(path)
         manager.create_virtualenv()
-        manager.install_airbyte_source(source, source_install)
+        manager.install_source(source, source_install)
         self._source_env_managers[source] = manager
 
     def _get_source_exec_path(self, source: str) -> str:
@@ -136,21 +137,13 @@ class BrickByte:
         staging_volume: str,
     ):
         """Validate sync parameters."""
-        # Validate mode
-        # Currently we only support what StreamingWriter supports (effectively append/create)
-        # But we keep parameter for API compatibility/future expansion
         valid_modes = ("append", "overwrite")
         if mode not in valid_modes:
             if mode == "merge":
-                raise NotImplementedError("Merge mode is not yet supported in streaming architecture.")
+                raise NotImplementedError("Merge mode is not yet supported.")
             raise ValueError(
                 f"Invalid mode '{mode}'. Must be one of: {', '.join(valid_modes)}"
             )
-            
-        if not staging_volume:
-            # staging_volume is conditionally required by the factory (if no active Spark session)
-            # We defer detailed validation to the factory
-            pass
 
     def preview(
         self,
@@ -166,12 +159,11 @@ class BrickByte:
         Preview a sync operation.
 
         Args:
-            source: Airbyte source connector name
+            source: Source connector name
             source_config: Configuration dictionary for the source
             catalog: Unity Catalog name
             schema: Target schema name
             streams: List of streams to preview (None = all streams)
-            primary_key: For merge preview, dict mapping stream names to keys
             source_install: Override source installation
             sample_size: Number of sample records per stream
 
@@ -182,15 +174,12 @@ class BrickByte:
 
         from brickbyte.preview import PreviewEngine
 
-        # Merge discovered credentials into source_config
         merged_config = self._credential_resolver.merge_credentials(source, source_config)
 
         try:
-            # Setup source
             logger.info(f"Setting up {source}...")
             self._setup_source(source, source_install)
 
-            # Configure source
             ab_source = ab.get_source(
                 source,
                 config=merged_config,
@@ -205,7 +194,6 @@ class BrickByte:
 
             selected = list(ab_source.get_selected_streams())
 
-            # Generate preview
             logger.info("Generating preview (streaming)...")
             engine = PreviewEngine(catalog=catalog, schema=schema)
             result = engine.preview(
@@ -228,6 +216,7 @@ class BrickByte:
         staging_volume: Optional[str] = None,
         streams: Optional[List[str]] = None,
         mode: str = "overwrite",
+        flatten: bool = False,
         enrich_metadata: bool = False,
         enrich_model: Optional[str] = None,
         warehouse_id: Optional[str] = None,
@@ -235,45 +224,44 @@ class BrickByte:
         cleanup: bool = True,
         buffer_size_records: int = 50000,
         buffer_size_mb: int = 100,
+        continue_on_error: bool = False,
     ) -> SyncResult:
         """
-        Sync data from an Airbyte source to Databricks (Streaming).
+        Sync data from a source connector to Databricks (Streaming).
         
         Args:
-            source: Airbyte source connector name (e.g., "source-github")
+            source: Source connector name (e.g., "source-github")
             source_config: Configuration dictionary for the source connector
             catalog: Unity Catalog name (e.g., "main")
             schema: Target schema name (e.g., "bronze")
             staging_volume: Unity Catalog Volume path (REQUIRED for remote)
             streams: List of streams to sync. None = all streams (default)
-            mode: Write mode (currently supports "overwrite" and "append")
+            mode: Write mode ("overwrite" or "append")
+            flatten: If True, flatten record fields into columns. 
+                    If False (default), store as JSON in 'data' column.
             enrich_metadata: If True, use AI to generate column descriptions
-            enrich_model: Foundation Model endpoint for enrichment (default: databricks-meta-llama-3-3-70b-instruct)
+            enrich_model: Foundation Model endpoint for enrichment
             warehouse_id: SQL warehouse ID (optional, auto-discovered)
             source_install: Override source installation (e.g., custom git URL)
             cleanup: Whether to cleanup venvs after sync (default: True)
             buffer_size_records: Records per micro-batch (default: 50k)
             buffer_size_mb: Max batch size in MB (default: 100MB)
+            continue_on_error: If True, continue syncing other streams if one fails
 
         Returns:
-            SyncResult with records_written, streams_synced, and enriched_tables
+            SyncResult with records_written, streams_synced, failed_streams, enriched_tables
         """
         import airbyte as ab
 
         from brickbyte.writers import create_streaming_writer
 
-        # Validate parameters
         self._validate_sync_params(mode, staging_volume)
-
-        # Merge discovered credentials into source_config
         merged_config = self._credential_resolver.merge_credentials(source, source_config)
 
         try:
-            # Setup source connector
             logger.info(f"Setting up {source}...")
             self._setup_source(source, source_install)
 
-            # Configure source
             logger.info(f"Configuring {source}...")
             ab_source = ab.get_source(
                 source,
@@ -291,7 +279,6 @@ class BrickByte:
 
             selected = list(ab_source.get_selected_streams())
 
-            # STREAMING EXECUTION
             via_msg = f" via {staging_volume}" if staging_volume else " (Native Spark)"
             logger.info(f"Streaming {len(selected)} streams to {catalog}.{schema}{via_msg}...")
             
@@ -302,14 +289,15 @@ class BrickByte:
                 warehouse_id=warehouse_id,
                 buffer_size_records=buffer_size_records,
                 buffer_size_mb=buffer_size_mb,
+                flatten=flatten,
             )
             
             total_records = 0
-            # Iterate through selected streams
+            failed_streams: List[str] = []
+            
             for stream_name in selected:
                 logger.info(f"  Streaming: {stream_name}")
                 
-                # Handle Overwrite Mode
                 if mode == "overwrite":
                     writer.drop_table(stream_name)
 
@@ -322,23 +310,39 @@ class BrickByte:
                         if count % 10000 == 0:
                             logger.info(f"    ...streamed {count} records")
                     
-                    # Flush remaining
                     writer.flush_stream(stream_name)
                     logger.info(f"    ✓ {count} records streamed")
                     total_records += count
                 except Exception as e:
-                    logger.warning(f"  Warning: Streaming failed for {stream_name}: {e}")
+                    error_name = type(e).__name__
+                    logger.error(f"  ✗ Failed to stream {stream_name}: {e}")
+                    failed_streams.append(stream_name)
+                    
+                    is_fatal = "ConnectorFailed" in error_name
+                    if is_fatal and not continue_on_error:
+                        raise
+                    if not continue_on_error:
+                        raise
+            
+            if failed_streams:
+                if continue_on_error:
+                    logger.warning(
+                        f"Completed with {len(failed_streams)} failed streams: {failed_streams}"
+                    )
+                else:
+                    raise RuntimeError(f"Sync failed. Failed streams: {failed_streams}")
             
             writer.close()
             
-            # Enrich metadata with AI if requested
+            successful_streams = [s for s in selected if s not in failed_streams]
+            
             enriched_tables = []
-            if enrich_metadata:
+            if enrich_metadata and successful_streams:
                 logger.info("Enriching metadata with AI...")
                 from brickbyte.enrichment import enrich_table
 
                 model = enrich_model or "databricks-meta-llama-3-3-70b-instruct"
-                for stream_name in selected:
+                for stream_name in successful_streams:
                     try:
                         enrich_table(
                             catalog=catalog,
@@ -353,7 +357,8 @@ class BrickByte:
 
             return SyncResult(
                 records_written=total_records,
-                streams_synced=selected,
+                streams_synced=successful_streams,
+                failed_streams=failed_streams,
                 enriched_tables=enriched_tables,
             )
 
@@ -368,25 +373,12 @@ class BrickByte:
         self._source_env_managers.clear()
 
     def list_configured_sources(self) -> List[str]:
-        """
-        List all sources that have credentials configured.
-        
-        Returns:
-            List of source names with available credentials
-        """
+        """List all sources that have credentials configured."""
         return self._credential_resolver.list_available_sources()
 
     def validate_credentials(self, source: str) -> bool:
-        """
-        Check if credentials are configured for a source.
-        
-        Args:
-            source: Source connector name (e.g., "source-s3")
-            
-        Returns:
-            True if credentials were found
-        """
+        """Check if credentials are configured for a source."""
         return self._credential_resolver.validate(source)
 
 
-__all__ = ["BrickByte", "SyncResult", "Source"]
+__all__ = ["Brickbyte", "SyncResult", "Source"]

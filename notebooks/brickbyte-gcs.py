@@ -17,9 +17,9 @@
 
 # COMMAND ----------
 
-from brickbyte import BrickByte
+from brickbyte import Brickbyte
 
-bb = BrickByte()
+bb = Brickbyte()
 
 # COMMAND ----------
 
