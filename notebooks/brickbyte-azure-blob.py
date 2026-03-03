@@ -4,7 +4,7 @@
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC # Azure Blob Storage to Databricks with BrickByte
+# MAGIC # Azure Blob Storage to Databricks with brickbyte
 # MAGIC 
 # MAGIC This notebook syncs files from Azure Blob Storage to Delta Lake tables in Unity Catalog.
 # MAGIC 
@@ -22,9 +22,9 @@
 
 # COMMAND ----------
 
-from brickbyte import Brickbyte
+import brickbyte
 
-bb = Brickbyte()
+bb = brickbyte.client()
 
 # COMMAND ----------
 

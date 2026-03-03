@@ -7,8 +7,8 @@ Provides AI-powered metadata enrichment for tables:
 - Data classification
 """
 from brickbyte.enrichment.semantic import (
-    SQLSemanticEnricher,
     SemanticEnricher,
+    SQLSemanticEnricher,
     enrich_table,
 )
 

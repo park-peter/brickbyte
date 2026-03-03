@@ -1,6 +1,6 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # BrickByte - DataDog Example
+# MAGIC # brickbyte - DataDog Example
 # MAGIC 
 # MAGIC Sync monitoring data from DataDog to Databricks.
 # MAGIC 
@@ -14,9 +14,9 @@
 
 # COMMAND ----------
 
-from brickbyte import Brickbyte
+import brickbyte
 
-bb = Brickbyte()
+bb = brickbyte.client()
 
 # COMMAND ----------
 

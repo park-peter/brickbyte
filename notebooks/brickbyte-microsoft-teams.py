@@ -4,7 +4,7 @@
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC # Microsoft Teams to Databricks with BrickByte
+# MAGIC # Microsoft Teams to Databricks with brickbyte
 # MAGIC 
 # MAGIC This notebook syncs data from Microsoft Teams to Delta Lake tables in Unity Catalog.
 # MAGIC 
@@ -30,9 +30,9 @@
 
 # COMMAND ----------
 
-from brickbyte import Brickbyte
+import brickbyte
 
-bb = Brickbyte()
+bb = brickbyte.client()
 
 # COMMAND ----------
 
@@ -40,7 +40,7 @@ bb = Brickbyte()
 # MAGIC ## Azure AD App Setup
 # MAGIC 
 # MAGIC 1. Go to [Azure Portal](https://portal.azure.com/) → Azure Active Directory → App registrations
-# MAGIC 2. Click **New registration**, name it (e.g., "BrickByte Teams Connector")
+# MAGIC 2. Click **New registration**, name it (e.g., "brickbyte Teams Connector")
 # MAGIC 3. Under **API permissions**, add Microsoft Graph **Application permissions**:
 # MAGIC    - `Group.Read.All`
 # MAGIC    - `Channel.Read.All`

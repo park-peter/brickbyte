@@ -1,6 +1,6 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # BrickByte - GitHub Example
+# MAGIC # brickbyte - GitHub Example
 # MAGIC 
 # MAGIC Sync data from GitHub to Databricks.
 # MAGIC 
@@ -13,9 +13,9 @@
 
 # COMMAND ----------
 
-from brickbyte import Brickbyte
+import brickbyte
 
-bb = Brickbyte()
+bb = brickbyte.client()
 
 # COMMAND ----------
 

@@ -4,7 +4,7 @@ Deduplication logic for brickbyte.
 Uses MERGE to remove duplicate records based on user-specified keys.
 """
 import logging
-from typing import List, Optional
+from typing import List
 
 logger = logging.getLogger("brickbyte")
 

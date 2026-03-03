@@ -4,7 +4,7 @@
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC # Google Drive to Databricks with BrickByte
+# MAGIC # Google Drive to Databricks with brickbyte
 # MAGIC 
 # MAGIC This notebook syncs files from Google Drive to Delta Lake tables in Unity Catalog.
 # MAGIC 
@@ -16,9 +16,9 @@
 
 # COMMAND ----------
 
-from brickbyte import Brickbyte
+import brickbyte
 
-bb = Brickbyte()
+bb = brickbyte.client()
 
 # COMMAND ----------
 

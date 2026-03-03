@@ -4,7 +4,7 @@
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC # Amazon S3 to Databricks with BrickByte
+# MAGIC # Amazon S3 to Databricks with brickbyte
 # MAGIC 
 # MAGIC This notebook syncs files from Amazon S3 to Delta Lake tables in Unity Catalog.
 # MAGIC 
@@ -21,9 +21,9 @@
 
 # COMMAND ----------
 
-from brickbyte import Brickbyte
+import brickbyte
 
-bb = Brickbyte()
+bb = brickbyte.client()
 
 # COMMAND ----------
 

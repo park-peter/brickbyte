@@ -275,11 +275,13 @@ class Client:
             # If dedup_keys is a dict, validate keys match selected streams (original names)
             if deduplicate and isinstance(normalized_dedup_keys, dict):
                 for dk_stream in normalized_dedup_keys:
+                    if dk_stream == "__all__":
+                        continue
                     if dk_stream not in selected:
                         # Check if user used sanitized name by mistake
-                        sanitized_to_original = {v: k for k, v in sanitized_map.items()}
-                        if dk_stream in sanitized_to_original:
-                            orig = sanitized_to_original[dk_stream]
+                        # sanitized_map: sanitized_name -> original_name
+                        if dk_stream in sanitized_map:
+                            orig = sanitized_map[dk_stream]
                             raise ValueError(
                                 f"dedup_keys key '{dk_stream}' is a sanitized name. "
                                 f"Use the original Airbyte stream name '{orig}' instead."
