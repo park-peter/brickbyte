@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "brickbyte"
-version = "0.1.0"
+version = "0.1.0rc1"
 description = "Sync data from Airbyte sources to Databricks Unity Catalog with streaming architecture"
 authors = [
     { name="Sri Tikkireddy", email="sri.tikkireddy@databricks.com" },
