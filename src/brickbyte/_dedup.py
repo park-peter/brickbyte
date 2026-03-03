@@ -39,8 +39,16 @@ def deduplicate_stream(
     if not key_columns:
         return
 
+    from brickbyte._sanitize import validate_identifier
+
+    validated_keys = [validate_identifier(col) for col in key_columns]
+    validate_identifier(run_id_col)
+    validated_extracted_at_col = validate_identifier(extracted_at_col)
+    validated_record_id_col = validate_identifier(record_id_col)
+    validated_dk_missing_col = validate_identifier(dk_missing_col)
+
     key_match = " AND ".join(
-        f"t.`{col}` <=> s.`{col}`" for col in key_columns
+        f"t.`{col}` <=> s.`{col}`" for col in validated_keys
     )
 
     # Build the dedup MERGE statement
@@ -49,14 +57,14 @@ def deduplicate_stream(
     MERGE INTO {table_name} t
     USING (
         SELECT *, ROW_NUMBER() OVER (
-            PARTITION BY {', '.join(f'`{c}`' for c in key_columns)}
-            ORDER BY `{extracted_at_col}` DESC, `{record_id_col}` DESC
+            PARTITION BY {', '.join(f'`{c}`' for c in validated_keys)}
+            ORDER BY `{validated_extracted_at_col}` DESC, `{validated_record_id_col}` DESC
         ) AS _rn
         FROM {table_name}
-        WHERE `{dk_missing_col}` = false
+        WHERE `{validated_dk_missing_col}` = false
     ) s
     ON {key_match}
-       AND t.`{record_id_col}` = s.`{record_id_col}`
+       AND t.`{validated_record_id_col}` = s.`{validated_record_id_col}`
     WHEN MATCHED AND s._rn > 1 THEN DELETE
     """
 
@@ -64,19 +72,18 @@ def deduplicate_stream(
 
 
 def _execute_sql(executor, sql: str):
-    """Execute SQL via whatever executor is available."""
-    if executor is None:
-        # Try Spark
-        try:
-            from pyspark.sql import SparkSession
+    """Execute SQL via the provided executor.
 
-            spark = SparkSession.getActiveSession()
-            if spark:
-                spark.sql(sql)
-                return
-        except ImportError:
-            pass
-        raise RuntimeError("No executor available for dedup SQL")
+    The executor should be a writer instance that has either a ``spark``
+    attribute (SparkStreamingWriter) or an ``_execute`` method
+    (SQLStreamingWriter).  Passing ``None`` is a programming error —
+    callers must always supply the writer that owns the table.
+    """
+    if executor is None:
+        raise RuntimeError(
+            "No executor provided for dedup SQL. "
+            "This is a bug — the writer that wrote the table must be passed."
+        )
 
     if hasattr(executor, "spark"):
         executor.spark.sql(sql)

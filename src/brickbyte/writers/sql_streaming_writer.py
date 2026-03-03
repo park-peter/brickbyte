@@ -333,8 +333,21 @@ class SQLStreamingWriter(BaseWriter):
         finally:
             self._overwrite_streams.pop(stream_name, None)
 
+    # Safe widening pairs: (narrower, wider) — SQL type names (lowercase)
+    _SAFE_WIDENINGS_SQL = {
+        ("int", "bigint"),
+        ("int", "double"),
+        ("bigint", "double"),
+        ("float", "double"),
+        ("smallint", "int"),
+        ("smallint", "bigint"),
+        ("tinyint", "smallint"),
+        ("tinyint", "int"),
+        ("tinyint", "bigint"),
+    }
+
     def _atomic_overwrite_sql(self, target_name: str, staging_name: str):
-        """Perform atomic INSERT OVERWRITE via SQL with schema alignment."""
+        """Perform atomic INSERT OVERWRITE via SQL with schema alignment and type checks."""
         conn = self._get_connection()
         cursor = conn.cursor()
         try:
@@ -349,6 +362,23 @@ class SQLStreamingWriter(BaseWriter):
         target_cols = set(target_schema.keys())
         staging_cols = set(staging_schema.keys())
 
+        # Check for incompatible type changes
+        for col in target_cols & staging_cols:
+            t_type = target_schema[col].lower()
+            s_type = staging_schema[col].lower()
+            if t_type != s_type:
+                pair = (s_type, t_type)
+                reverse = (t_type, s_type)
+                is_safe = pair in self._SAFE_WIDENINGS_SQL
+                is_reverse_safe = reverse in self._SAFE_WIDENINGS_SQL
+                if not is_safe and not is_reverse_safe:
+                    if t_type != "string" and s_type != "string":
+                        raise ValueError(
+                            f"Incompatible type change for column '{col}': "
+                            f"{target_schema[col]} -> {staging_schema[col]}. "
+                            f"Drop the table manually to reset schema."
+                        )
+
         # Add new columns from staging to target
         new_cols = staging_cols - target_cols
         for col in new_cols:
@@ -360,7 +390,27 @@ class SQLStreamingWriter(BaseWriter):
         all_cols = target_cols | staging_cols
         select_parts = []
         for col in sorted(all_cols):
-            if col in staging_cols:
+            if col in staging_cols and col in target_cols:
+                s_type = staging_schema[col].lower()
+                t_type = target_schema[col].lower()
+                if s_type != t_type:
+                    # Always widen to the wider type
+                    if (s_type, t_type) in self._SAFE_WIDENINGS_SQL:
+                        select_parts.append(
+                            f"CAST(`{col}` AS {target_schema[col]}) AS `{col}`"
+                        )
+                    elif (t_type, s_type) in self._SAFE_WIDENINGS_SQL:
+                        # Staging is wider — widen target to match
+                        self._execute(
+                            f"ALTER TABLE {target_name} "
+                            f"ALTER COLUMN `{col}` TYPE {staging_schema[col]}"
+                        )
+                        select_parts.append(f"`{col}`")
+                    else:
+                        select_parts.append(f"`{col}`")
+                else:
+                    select_parts.append(f"`{col}`")
+            elif col in staging_cols:
                 select_parts.append(f"`{col}`")
             else:
                 select_parts.append(f"NULL AS `{col}`")

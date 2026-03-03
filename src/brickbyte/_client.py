@@ -8,7 +8,7 @@ import subprocess
 import threading
 import uuid
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Union
 
 from brickbyte import SyncResult
 
@@ -208,7 +208,8 @@ class Client:
             timeout_seconds: Optional timeout in seconds for the sync operation
             incremental: If True, use incremental sync with state management
             deduplicate: If True, deduplicate records after sync
-            dedup_keys: Column(s) to use as dedup keys (required when deduplicate=True)
+            dedup_keys: Column(s) to use as dedup keys (required when deduplicate=True;
+                        ignored when deduplicate=False)
             max_parallel_streams: Max number of streams to write in parallel (default: 1)
             progress_callback: Optional callback for progress reporting
 
@@ -229,6 +230,8 @@ class Client:
         normalized_dedup_keys = None
         if deduplicate:
             normalized_dedup_keys = self._normalize_dedup_keys(dedup_keys, streams)
+        elif dedup_keys is not None:
+            logger.info("dedup_keys provided but deduplicate=False; ignoring dedup_keys")
 
         # Set up timeout
         cancel_event = None
@@ -240,6 +243,7 @@ class Client:
             timer.start()
 
         writer = None
+        progress_reporter = None
         try:
             logger.info(f"Setting up {source}...")
             self._setup_source(source, source_install)
@@ -272,14 +276,13 @@ class Client:
                     )
                 sanitized_map[sanitized] = stream
 
-            # If dedup_keys is a dict, validate keys match selected streams (original names)
+            if normalized_dedup_keys is not None and "__all__" in normalized_dedup_keys:
+                all_keys = normalized_dedup_keys["__all__"]
+                normalized_dedup_keys = {s: all_keys for s in selected}
+
             if deduplicate and isinstance(normalized_dedup_keys, dict):
                 for dk_stream in normalized_dedup_keys:
-                    if dk_stream == "__all__":
-                        continue
                     if dk_stream not in selected:
-                        # Check if user used sanitized name by mistake
-                        # sanitized_map: sanitized_name -> original_name
                         if dk_stream in sanitized_map:
                             orig = sanitized_map[dk_stream]
                             raise ValueError(
@@ -291,21 +294,31 @@ class Client:
                             f"Selected streams: {selected}"
                         )
 
-            # Load incremental state if needed
             state_manager = None
+            stream_states: Dict[str, dict] = {}
             if incremental:
                 from brickbyte._state import StateManager
 
-                state_manager = StateManager(catalog=catalog, schema=schema)
-                # TODO: load and pass state to PyAirbyte
+                state_manager = StateManager(
+                    catalog=catalog,
+                    schema=schema,
+                    staging_volume=staging_volume,
+                    warehouse_id=warehouse_id,
+                )
+                for stream_name in selected:
+                    saved = state_manager.get_state(source, stream_name)
+                    if saved is not None:
+                        stream_states[stream_name] = saved
+                        logger.info(
+                            f"  Loaded incremental state for {stream_name}"
+                        )
+                self._apply_incremental_state(ab_source, stream_states)
 
             via_msg = f" via {staging_volume}" if staging_volume else " (Native Spark)"
             logger.info(
                 f"Streaming {len(selected)} streams to {catalog}.{schema}{via_msg}..."
             )
 
-            # Set up progress reporter
-            progress_reporter = None
             if progress_callback is not None:
                 from brickbyte._progress import ProgressReporter
 
@@ -319,6 +332,19 @@ class Client:
             successful_streams: List[str] = []
             lock = threading.Lock()
 
+            # Common writer-creation kwargs used by both paths
+            _writer_kwargs = dict(
+                catalog=catalog,
+                schema=schema,
+                staging_volume=staging_volume,
+                warehouse_id=warehouse_id,
+                buffer_size_records=buffer_size_records,
+                buffer_size_mb=buffer_size_mb,
+                flatten=flatten,
+                run_id=run_id,
+                dedup_keys=normalized_dedup_keys,
+            )
+
             if max_parallel_streams > 1:
                 import concurrent.futures
 
@@ -331,17 +357,7 @@ class Client:
 
                 def _write_stream_records(stream_name, records_list, _run_id, _mode):
                     """Write a list of records in a thread-owned writer."""
-                    thread_writer = create_streaming_writer(
-                        catalog=catalog,
-                        schema=schema,
-                        staging_volume=staging_volume,
-                        warehouse_id=warehouse_id,
-                        buffer_size_records=buffer_size_records,
-                        buffer_size_mb=buffer_size_mb,
-                        flatten=flatten,
-                        run_id=_run_id,
-                        dedup_keys=normalized_dedup_keys,
-                    )
+                    thread_writer = create_streaming_writer(**_writer_kwargs)
                     try:
                         if _mode == "overwrite":
                             thread_writer.safe_overwrite_begin(stream_name, _run_id)
@@ -353,12 +369,13 @@ class Client:
                         if _mode == "overwrite":
                             thread_writer.safe_overwrite_finish(stream_name, _run_id)
 
-                        return len(records_list)
-                    finally:
+                        return stream_name, len(records_list), thread_writer
+                    except Exception:
                         thread_writer.close()
                         with in_flight_lock:
                             nonlocal in_flight
                             in_flight -= 1
+                        raise
 
                 for stream_name in selected:
                     logger.info(f"  Streaming: {stream_name}")
@@ -382,30 +399,17 @@ class Client:
                             records_list.append(record)
 
                             if accumulated_size >= buffer_size_mb * 1024 * 1024:
-                                # Oversized: switch to synchronous mode
                                 oversized = True
                                 break
 
                         if oversized:
-                            # Process synchronously in main thread
-                            sync_writer = create_streaming_writer(
-                                catalog=catalog,
-                                schema=schema,
-                                staging_volume=staging_volume,
-                                warehouse_id=warehouse_id,
-                                buffer_size_records=buffer_size_records,
-                                buffer_size_mb=buffer_size_mb,
-                                flatten=flatten,
-                                run_id=run_id,
-                                dedup_keys=normalized_dedup_keys,
-                            )
+                            sync_writer = create_streaming_writer(**_writer_kwargs)
                             try:
                                 if mode == "overwrite":
                                     sync_writer.safe_overwrite_begin(stream_name, run_id)
 
                                 for rec in records_list:
                                     sync_writer.write_record(stream_name, rec)
-                                # Continue consuming remaining records
                                 count = len(records_list)
                                 for record in records_generator:
                                     if cancel_event and cancel_event.is_set():
@@ -414,19 +418,39 @@ class Client:
                                         )
                                     sync_writer.write_record(stream_name, record)
                                     count += 1
+                                    if progress_reporter and count % 5000 == 0:
+                                        progress_reporter.record_processed(stream_name, count)
                                 sync_writer.flush_stream(stream_name)
 
                                 if mode == "overwrite":
                                     sync_writer.safe_overwrite_finish(stream_name, run_id)
 
+                                self._run_dedup_for_stream(
+                                    stream_name, deduplicate, normalized_dedup_keys,
+                                    flatten, catalog, schema, sync_writer,
+                                )
+
                                 with lock:
                                     total_records += count
                                     successful_streams.append(stream_name)
+
+                                if progress_reporter:
+                                    progress_reporter.stream_completed(stream_name, count)
+
+                                self._save_incremental_state(
+                                    state_manager=state_manager,
+                                    incremental=incremental,
+                                    ab_source=ab_source,
+                                    source=source,
+                                    stream_name=stream_name,
+                                    run_id=run_id,
+                                    records_written=count,
+                                )
+
                                 logger.info(f"    {count} records streamed (sync)")
                             finally:
                                 sync_writer.close()
                         else:
-                            # Wait until in-flight count is below limit
                             import time
 
                             while True:
@@ -452,7 +476,6 @@ class Client:
 
                         is_fatal = "ConnectorFailed" in error_name
                         if is_fatal or not continue_on_error:
-                            # Cancel remaining futures
                             for _, f in futures:
                                 f.cancel()
                             raise
@@ -460,10 +483,34 @@ class Client:
                 # Collect results from futures
                 for stream_name, future in futures:
                     try:
-                        count = future.result()
+                        _sname, count, thread_writer = future.result()
+                        try:
+                            self._run_dedup_for_stream(
+                                _sname, deduplicate, normalized_dedup_keys,
+                                flatten, catalog, schema, thread_writer,
+                            )
+                        finally:
+                            thread_writer.close()
+                            with in_flight_lock:
+                                in_flight -= 1
+
                         with lock:
                             total_records += count
-                            successful_streams.append(stream_name)
+                            successful_streams.append(_sname)
+
+                        if progress_reporter:
+                            progress_reporter.stream_completed(_sname, count)
+
+                        self._save_incremental_state(
+                            state_manager=state_manager,
+                            incremental=incremental,
+                            ab_source=ab_source,
+                            source=source,
+                            stream_name=_sname,
+                            run_id=run_id,
+                            records_written=count,
+                        )
+
                         logger.info(f"    {count} records streamed")
                     except Exception as e:
                         logger.error(f"  Failed to stream {stream_name}: {e}")
@@ -478,17 +525,7 @@ class Client:
 
             else:
                 # Sequential processing (default)
-                writer = create_streaming_writer(
-                    catalog=catalog,
-                    schema=schema,
-                    staging_volume=staging_volume,
-                    warehouse_id=warehouse_id,
-                    buffer_size_records=buffer_size_records,
-                    buffer_size_mb=buffer_size_mb,
-                    flatten=flatten,
-                    run_id=run_id,
-                    dedup_keys=normalized_dedup_keys,
-                )
+                writer = create_streaming_writer(**_writer_kwargs)
 
                 for stream_name in selected:
                     logger.info(f"  Streaming: {stream_name}")
@@ -507,6 +544,10 @@ class Client:
 
                             writer.write_record(stream_name, record)
                             count += 1
+
+                            if progress_reporter and count % 5000 == 0:
+                                progress_reporter.record_processed(stream_name, count)
+
                             if count % 10000 == 0:
                                 logger.info(f"    ...streamed {count} records")
 
@@ -524,6 +565,11 @@ class Client:
                         if mode == "overwrite":
                             writer.safe_overwrite_finish(stream_name, run_id)
 
+                        self._run_dedup_for_stream(
+                            stream_name, deduplicate, normalized_dedup_keys,
+                            flatten, catalog, schema, writer,
+                        )
+
                         logger.info(f"    {count} records streamed")
                         total_records += count
                         successful_streams.append(stream_name)
@@ -531,10 +577,15 @@ class Client:
                         if progress_reporter:
                             progress_reporter.stream_completed(stream_name, count)
 
-                        # Save incremental state on success
-                        if state_manager and incremental:
-                            # TODO: save state from PyAirbyte
-                            pass
+                        self._save_incremental_state(
+                            state_manager=state_manager,
+                            incremental=incremental,
+                            ab_source=ab_source,
+                            source=source,
+                            stream_name=stream_name,
+                            run_id=run_id,
+                            records_written=count,
+                        )
 
                     except Exception as e:
                         error_name = type(e).__name__
@@ -558,52 +609,20 @@ class Client:
                         f"Sync failed. Failed streams: {failed_streams}"
                     )
 
-            # Run deduplication if enabled
-            if deduplicate and normalized_dedup_keys and successful_streams:
-                from brickbyte._dedup import deduplicate_stream
-                from brickbyte._sanitize import sanitize_stream_name as _sanitize
-
-                for stream_name in successful_streams:
-                    sanitized = _sanitize(stream_name)
-                    stream_keys = normalized_dedup_keys.get(stream_name)
-                    if stream_keys is None:
-                        continue
-
-                    table_name = f"`{catalog}`.`{schema}`.`{sanitized}`"
-                    if flatten:
-                        deduplicate_stream(
-                            executor=writer if writer else None,
-                            table_name=table_name,
-                            key_columns=stream_keys,
-                            run_id_col="_run_id",
-                            extracted_at_col="_extracted_at",
-                            record_id_col="_record_id",
-                            flatten=True,
-                        )
-                    else:
-                        dk_cols = [f"_dk_{i}" for i in range(len(stream_keys))]
-                        deduplicate_stream(
-                            executor=writer if writer else None,
-                            table_name=table_name,
-                            key_columns=dk_cols,
-                            run_id_col="run_id",
-                            extracted_at_col="extracted_at",
-                            record_id_col="record_id",
-                            flatten=False,
-                        )
-
             enriched_tables = []
             if enrich_metadata and successful_streams:
                 logger.info("Enriching metadata with AI...")
+                from brickbyte._sanitize import sanitize_stream_name as _sanitize
                 from brickbyte.enrichment import enrich_table
 
                 model = enrich_model or "databricks-meta-llama-3-3-70b-instruct"
                 for stream_name in successful_streams:
                     try:
+                        sanitized = _sanitize(stream_name)
                         enrich_table(
                             catalog=catalog,
                             schema=schema,
-                            table=stream_name,
+                            table=sanitized,
                             apply_to_catalog=True,
                             model_name=model,
                         )
@@ -623,10 +642,61 @@ class Client:
         finally:
             if timer is not None:
                 timer.cancel()
+            if progress_reporter is not None:
+                try:
+                    progress_reporter.close()
+                except Exception as e:
+                    logger.debug(f"Failed to close progress reporter: {e}")
             if writer is not None:
                 writer.close()
             if cleanup:
                 self.cleanup()
+
+    def _run_dedup_for_stream(
+        self,
+        stream_name: str,
+        deduplicate: bool,
+        normalized_dedup_keys: Optional[Dict[str, List[str]]],
+        flatten: bool,
+        catalog: str,
+        schema: str,
+        executor_writer,
+    ):
+        """Run dedup for a single stream using the provided writer as executor."""
+        if not deduplicate or not normalized_dedup_keys:
+            return
+
+        stream_keys = normalized_dedup_keys.get(stream_name)
+        if stream_keys is None:
+            return
+
+        from brickbyte._dedup import deduplicate_stream
+        from brickbyte._sanitize import sanitize_stream_name
+
+        sanitized = sanitize_stream_name(stream_name)
+        table_name = f"`{catalog}`.`{schema}`.`{sanitized}`"
+        dk_cols = [f"_dk_{i}" for i in range(len(stream_keys))]
+
+        if flatten:
+            deduplicate_stream(
+                executor=executor_writer,
+                table_name=table_name,
+                key_columns=dk_cols,
+                run_id_col="_run_id",
+                extracted_at_col="_extracted_at",
+                record_id_col="_record_id",
+                flatten=True,
+            )
+        else:
+            deduplicate_stream(
+                executor=executor_writer,
+                table_name=table_name,
+                key_columns=dk_cols,
+                run_id_col="run_id",
+                extracted_at_col="extracted_at",
+                record_id_col="record_id",
+                flatten=False,
+            )
 
     def _normalize_dedup_keys(
         self,
@@ -643,7 +713,7 @@ class Client:
         if isinstance(dedup_keys, list):
             if len(dedup_keys) == 0:
                 raise ValueError("dedup_keys must be non-empty")
-            # Will be expanded to all selected streams later
+            self._validate_dedup_key_list(dedup_keys, context="dedup_keys")
             return {"__all__": dedup_keys}
 
         if isinstance(dedup_keys, dict):
@@ -652,9 +722,146 @@ class Client:
                     raise ValueError(
                         f"dedup_keys for stream '{stream_name}' must be non-empty"
                     )
+                self._validate_dedup_key_list(
+                    keys,
+                    context=f"dedup_keys for stream '{stream_name}'",
+                )
             return dedup_keys
 
         raise ValueError("dedup_keys must be a list or dict")
+
+    def _validate_dedup_key_list(self, keys: List[str], context: str) -> None:
+        """Validate dedup key identifier safety."""
+        from brickbyte._sanitize import validate_identifier
+
+        for key in keys:
+            if not isinstance(key, str) or not key:
+                raise ValueError(f"{context} must contain non-empty string keys")
+            try:
+                validate_identifier(key)
+            except ValueError as e:
+                raise ValueError(f"{context} contains invalid key '{key}': {e}") from e
+
+    def _apply_incremental_state(
+        self,
+        ab_source: Any,
+        stream_states: Dict[str, dict],
+    ) -> None:
+        """Apply previously saved stream states to the source before reading."""
+        if not stream_states:
+            return
+
+        for method_name in ("set_stream_state", "set_state_for_stream"):
+            method = getattr(ab_source, method_name, None)
+            if not callable(method):
+                continue
+            try:
+                for stream_name, state in stream_states.items():
+                    method(stream_name, state)
+                logger.info(
+                    f"Applied incremental state for {len(stream_states)} stream(s)"
+                )
+                return
+            except TypeError:
+                continue
+
+        set_state = getattr(ab_source, "set_state", None)
+        if callable(set_state):
+            state_payload = {
+                "streams": [
+                    {
+                        "stream": {"name": stream_name},
+                        "stream_state": state,
+                    }
+                    for stream_name, state in stream_states.items()
+                ]
+            }
+            for payload in (state_payload, stream_states):
+                try:
+                    set_state(payload)
+                    logger.info(
+                        f"Applied incremental state for {len(stream_states)} stream(s)"
+                    )
+                    return
+                except TypeError:
+                    continue
+
+        raise NotImplementedError(
+            "incremental=True requires source state injection support "
+            "(set_stream_state/set_state_for_stream/set_state)."
+        )
+
+    def _extract_incremental_state(
+        self,
+        ab_source: Any,
+        stream_name: str,
+        run_id: str,
+        records_written: int,
+    ) -> dict:
+        """Extract connector-emitted stream state when available."""
+        fallback_state = {"run_id": run_id, "records": records_written}
+
+        for method_name in ("get_stream_state", "stream_state"):
+            method = getattr(ab_source, method_name, None)
+            if not callable(method):
+                continue
+            try:
+                state = method(stream_name)
+                if state is not None:
+                    return state
+            except TypeError:
+                continue
+            except Exception as e:
+                logger.debug(f"Could not read stream state via {method_name}: {e}")
+
+        get_state = getattr(ab_source, "get_state", None)
+        if callable(get_state):
+            for args in ((stream_name,), tuple()):
+                try:
+                    state = get_state(*args)
+                except TypeError:
+                    continue
+                except Exception as e:
+                    logger.debug(f"Could not read state via get_state: {e}")
+                    break
+                if state is None:
+                    continue
+                if isinstance(state, dict):
+                    if stream_name in state:
+                        return state[stream_name]
+                    streams_state = state.get("streams")
+                    if isinstance(streams_state, dict) and stream_name in streams_state:
+                        return streams_state[stream_name]
+                return state
+
+        return fallback_state
+
+    def _save_incremental_state(
+        self,
+        state_manager,
+        incremental: bool,
+        ab_source: Any,
+        source: str,
+        stream_name: str,
+        run_id: str,
+        records_written: int,
+    ) -> None:
+        """Persist state for a successfully synced stream."""
+        if not incremental or state_manager is None:
+            return
+
+        state = self._extract_incremental_state(
+            ab_source=ab_source,
+            stream_name=stream_name,
+            run_id=run_id,
+            records_written=records_written,
+        )
+        state_manager.save_state(
+            source=source,
+            stream_name=stream_name,
+            state=state,
+            run_id=run_id,
+        )
 
     def cleanup(self):
         """Remove virtual environments."""

@@ -143,8 +143,11 @@ class PreviewEngine:
         return self._spark
 
     def get_table_name(self, stream_name: str) -> str:
-        """Get fully qualified table name."""
-        return f"{self.catalog}.{self.schema}.{stream_name}"
+        """Get fully qualified table name using sanitized stream name."""
+        from brickbyte._sanitize import sanitize_stream_name
+
+        sanitized = sanitize_stream_name(stream_name)
+        return f"`{self.catalog}`.`{self.schema}`.`{sanitized}`"
 
     def table_exists(self, stream_name: str) -> bool:
         """Check if target table exists."""
@@ -163,13 +166,26 @@ class PreviewEngine:
         return self.spark.table(table_name).count()
 
     def get_target_schema(self, stream_name: str) -> Dict[str, str]:
-        """Get schema of target table."""
+        """Get schema of target table.
+
+        Returns type names stripped of trailing ``()`` so that
+        ``StringType()`` becomes ``StringType``, matching the values
+        produced by ``_PYTHON_TO_SPARK``.
+        """
         if not self.table_exists(stream_name):
             return {}
 
         table_name = self.get_table_name(stream_name)
         df = self.spark.table(table_name)
-        return {f.name: str(f.dataType) for f in df.schema.fields}
+        schema = {}
+        for f in df.schema.fields:
+            type_str = str(f.dataType)
+            # Spark str() on simple types yields e.g. "StringType()" —
+            # strip the trailing "()" for consistent comparison.
+            if type_str.endswith("()"):
+                type_str = type_str[:-2]
+            schema[f.name] = type_str
+        return schema
 
     def get_source_schema(self, sample_records: List[dict]) -> Dict[str, str]:
         """Infer schema from sample records."""

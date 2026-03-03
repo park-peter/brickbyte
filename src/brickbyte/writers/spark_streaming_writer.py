@@ -23,6 +23,18 @@ class SparkStreamingWriter(BaseWriter):
     Writes data to Databricks using micro-batch streaming.
     """
 
+    _SAFE_WIDENINGS = {
+        ("IntegerType", "LongType"),
+        ("IntegerType", "DoubleType"),
+        ("LongType", "DoubleType"),
+        ("FloatType", "DoubleType"),
+        ("ShortType", "IntegerType"),
+        ("ShortType", "LongType"),
+        ("ByteType", "ShortType"),
+        ("ByteType", "IntegerType"),
+        ("ByteType", "LongType"),
+    }
+
     def __init__(
         self,
         catalog: str,
@@ -218,34 +230,20 @@ class SparkStreamingWriter(BaseWriter):
         target_df = self.spark.table(target_name)
         staging_df = self.spark.table(staging_name)
 
-        target_schema = {f.name: str(f.dataType) for f in target_df.schema.fields}
-        staging_schema = {f.name: str(f.dataType) for f in staging_df.schema.fields}
+        target_schema = {f.name: f.dataType for f in target_df.schema.fields}
+        staging_schema = {f.name: f.dataType for f in staging_df.schema.fields}
 
         target_cols = set(target_schema.keys())
         staging_cols = set(staging_schema.keys())
 
-        # Check for incompatible type changes
-        _SAFE_WIDENINGS = {
-            ("IntegerType", "LongType"),
-            ("IntegerType", "DoubleType"),
-            ("LongType", "DoubleType"),
-            ("FloatType", "DoubleType"),
-            ("ShortType", "IntegerType"),
-            ("ShortType", "LongType"),
-            ("ByteType", "ShortType"),
-            ("ByteType", "IntegerType"),
-            ("ByteType", "LongType"),
-        }
-
         for col in target_cols & staging_cols:
-            t_type = target_schema[col]
-            s_type = staging_schema[col]
+            t_type = self._type_name(target_schema[col])
+            s_type = self._type_name(staging_schema[col])
             if t_type != s_type:
-                if (s_type, t_type) not in _SAFE_WIDENINGS and (
+                if (s_type, t_type) not in self._SAFE_WIDENINGS and (
                     t_type,
                     s_type,
-                ) not in _SAFE_WIDENINGS:
-                    # Check if one can be cast to the other
+                ) not in self._SAFE_WIDENINGS:
                     if t_type != "StringType" and s_type != "StringType":
                         raise ValueError(
                             f"Incompatible type change for column '{col}': "
@@ -256,22 +254,29 @@ class SparkStreamingWriter(BaseWriter):
         # Add new columns from staging to target
         new_cols = staging_cols - target_cols
         for col in new_cols:
-            col_type = staging_schema[col]
+            col_type = self._sql_type(staging_schema[col])
             self.spark.sql(
                 f"ALTER TABLE {target_name} ADD COLUMNS (`{col}` {col_type})"
             )
 
-        # Build SELECT for INSERT OVERWRITE with all columns
         all_cols = target_cols | staging_cols
         select_parts = []
         for col in sorted(all_cols):
             if col in staging_cols and col in target_cols:
-                s_type = staging_schema[col]
-                t_type = target_schema[col]
-                if s_type != t_type and (s_type, t_type) in _SAFE_WIDENINGS:
-                    select_parts.append(f"CAST(`{col}` AS {t_type}) AS `{col}`")
-                elif s_type != t_type and (t_type, s_type) in _SAFE_WIDENINGS:
-                    select_parts.append(f"CAST(`{col}` AS {s_type}) AS `{col}`")
+                s_type = self._type_name(staging_schema[col])
+                t_type = self._type_name(target_schema[col])
+                if s_type != t_type and (s_type, t_type) in self._SAFE_WIDENINGS:
+                    target_sql_type = self._sql_type(target_schema[col])
+                    select_parts.append(
+                        f"CAST(`{col}` AS {target_sql_type}) AS `{col}`"
+                    )
+                elif s_type != t_type and (t_type, s_type) in self._SAFE_WIDENINGS:
+                    staging_sql_type = self._sql_type(staging_schema[col])
+                    self.spark.sql(
+                        f"ALTER TABLE {target_name} "
+                        f"ALTER COLUMN `{col}` TYPE {staging_sql_type}"
+                    )
+                    select_parts.append(f"`{col}`")
                 else:
                     select_parts.append(f"`{col}`")
             elif col in staging_cols:
@@ -286,3 +291,39 @@ class SparkStreamingWriter(BaseWriter):
             f"INSERT OVERWRITE {target_name} ({col_list}) "
             f"SELECT {select_expr} FROM {staging_name}"
         )
+
+    @staticmethod
+    def _type_name(data_type) -> str:
+        """Get normalized Spark class-based type name (e.g., IntegerType)."""
+        if isinstance(data_type, str):
+            if data_type.endswith("()"):
+                return data_type[:-2]
+            return data_type
+        return type(data_type).__name__
+
+    @staticmethod
+    def _sql_type(data_type) -> str:
+        """Get SQL type string for DDL/CAST clauses."""
+        if hasattr(data_type, "simpleString"):
+            return data_type.simpleString()
+
+        as_str = str(data_type)
+        if as_str.endswith("()"):
+            as_str = as_str[:-2]
+        if as_str.startswith("DecimalType(") and as_str.endswith(")"):
+            precision_scale = as_str[len("DecimalType("):-1]
+            return f"DECIMAL({precision_scale})"
+        mapping = {
+            "ByteType": "TINYINT",
+            "ShortType": "SMALLINT",
+            "IntegerType": "INT",
+            "LongType": "BIGINT",
+            "FloatType": "FLOAT",
+            "DoubleType": "DOUBLE",
+            "StringType": "STRING",
+            "BooleanType": "BOOLEAN",
+            "TimestampType": "TIMESTAMP",
+            "DateType": "DATE",
+            "BinaryType": "BINARY",
+        }
+        return mapping.get(as_str, as_str)
