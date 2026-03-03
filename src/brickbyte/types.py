@@ -105,6 +105,3 @@ Source = Literal[
     "source-zendesk-support",
     "source-zenloop"
 ]
-
-
-Destination = Literal["destination-databricks"]

@@ -1,22 +1,31 @@
-# BrickByte 🧱
+# Brickbyte 🧱
 
-**Sync data from Airbyte's 600+ connectors to Databricks in one line.**
+**Sync data from 600+ source connectors to Databricks with streaming performance.**
 
-BrickByte wraps [PyAirbyte](https://github.com/airbytehq/airbyte) to make it dead simple to extract data from any source and land it directly into Databricks Unity Catalog.
+Brickbyte wraps [PyAirbyte](https://github.com/airbytehq/airbyte) to extract data from any source and streams it directly to Databricks Unity Catalog.
+
+## Features
+
+- **600+ Sources** - All Airbyte connectors work out of the box
+- **Streaming Architecture** - Bypasses local disk, no OOM issues
+- **High Performance** - Uses Unity Catalog Volumes and `COPY INTO`
+- **Flexible Output** - Raw JSON or flattened columns
+- **AI Enrichment** - Auto-generate table descriptions and detect PII via Foundation Models
+- **Preview** - See what schema changes will occur before syncing
+- **Simple API** - One-line sync
 
 ## Quick Start
 
 ```python
-%pip install airbyte
-%pip install git+https://github.com/park-peter/brickbyte.git --force-reinstall --no-deps
+%pip install airbyte databricks-sdk databricks-sql-connector virtualenv
+%pip install git+https://github.com/park-peter/brickbyte.git
 dbutils.library.restartPython()
 ```
 
 ```python
-from brickbyte import BrickByte
+from brickbyte import Brickbyte
 
-bb = BrickByte()
-
+bb = Brickbyte()
 bb.sync(
     source="source-faker",
     source_config={"count": 100},
@@ -25,172 +34,135 @@ bb.sync(
 )
 ```
 
-That's it. BrickByte handles everything:
-- ✅ Installs source connector in isolated venv
-- ✅ Installs Databricks destination connector
-- ✅ Auto-discovers a running SQL warehouse
-- ✅ Auto-authenticates via Databricks SDK
-- ✅ Syncs data to Unity Catalog
-- ✅ Cleans up after itself
+## Output Formats
 
-## Real-World Examples
+### Raw Mode (Default)
+Stores data as JSON for schema flexibility:
 
-### GitHub
+| id | extracted_at | data |
+|----|--------------|------|
+| abc-123 | 2026-01-13 10:00:00 | {"displayName": "John", "email": "john@..."} |
+
+Query with JSON syntax:
+```sql
+SELECT data:displayName::STRING as name FROM my_table
+```
+
+### Flattened Mode
+Expands all fields into columns:
+
+```python
+bb.sync(..., flatten=True)
+```
+
+| displayName | email | _id | _extracted_at |
+|-------------|-------|-----|---------------|
+| John | john@... | abc-123 | 2026-01-13 10:00:00 |
+
+## Examples
+
+### Simple Sync (Overwrite)
 
 ```python
 bb.sync(
     source="source-github",
     source_config={
-        "credentials": {
-            "option_title": "PAT Credentials",
-            "personal_access_token": "ghp_...",
-        },
+        "credentials": {"personal_access_token": "ghp_..."},
         "repositories": ["owner/repo"],
     },
     catalog="main",
-    schema="raw_github",
-    streams=["commits", "issues", "pull_requests"],
+    schema="bronze",
+    staging_volume="main.staging.brickbyte_volume",
 )
 ```
 
-### Confluence
+### Flattened Output
 
 ```python
 bb.sync(
-    source="source-confluence",
-    source_config={
-        "domain_name": "your-company.atlassian.net",
-        "email": "you@company.com",
-        "api_token": "...",
-    },
+    source="source-salesforce",
+    source_config={...},
     catalog="main",
-    schema="raw_confluence",
+    schema="bronze",
+    flatten=True,  # All fields as top-level columns
 )
 ```
 
-### DataDog
-
-```python
-bb.sync(
-    source="source-datadog",
-    source_config={
-        "api_key": "...",
-        "application_key": "...",
-        "site": "datadoghq.com",
-        "start_date": "2024-01-01T00:00:00Z",
-        "end_date": "2024-12-31T23:59:59Z",
-    },
-    catalog="main",
-    schema="raw_datadog",
-)
-```
-
-## API Reference
-
-### `BrickByte()`
-
-```python
-bb = BrickByte(base_venv_directory="/tmp/brickbyte")  # Optional: custom venv location
-```
-
-### `bb.sync()`
+### With AI Metadata Enrichment
 
 ```python
 result = bb.sync(
-    source="source-github",           # Required: Airbyte source connector name
-    source_config={...},              # Required: Source configuration dict
-    catalog="main",                   # Required: Unity Catalog name
-    schema="bronze",                  # Required: Target schema name
-    streams=["commits", "issues"],    # Optional: List of streams (None = all)
-    warehouse_id="abc123",            # Optional: SQL warehouse ID (auto-discovered)
-    mode="full_refresh",              # Optional: "full_refresh" or "incremental"
-    cleanup=True,                     # Optional: Cleanup venvs after sync (default: True)
+    source="source-salesforce",
+    source_config={...},
+    catalog="main",
+    schema="bronze",
+    enrich_metadata=True,
 )
-
-print(f"Synced {result.records_written} records")
-print(f"Streams: {result.streams_synced}")
+# Tables get:
+#   - AI-generated table description (COMMENT ON TABLE)
+#   - Field descriptions stored in TBLPROPERTIES
+#   - PII detection stored as table TAGS
 ```
 
-## Supported Sources
-
-BrickByte supports all [600+ Airbyte connectors](https://docs.airbyte.com/integrations):
-
-| Category | Sources |
-|----------|---------|
-| **CRM** | Salesforce, HubSpot, Pipedrive, Close.com |
-| **Marketing** | Facebook Marketing, Google Ads, LinkedIn Ads, TikTok Marketing |
-| **Analytics** | Google Analytics, Mixpanel, Amplitude, PostHog, DataDog |
-| **Payments** | Stripe, Braintree, PayPal, Chargebee |
-| **Support** | Zendesk Support, Intercom, Freshdesk |
-| **Databases** | PostgreSQL, MySQL, MongoDB, MSSQL |
-| **Files** | S3, GCS, Azure Blob Storage, SFTP |
-| **Productivity** | Slack, Notion, Jira, Asana, Airtable, Confluence |
-| **E-commerce** | Shopify, Amazon Seller Partner |
-| **Dev Tools** | GitHub, GitLab, Sentry |
-
-## How It Works
-
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                         Databricks Notebook                         │
-├─────────────────────────────────────────────────────────────────────┤
-│                                                                     │
-│  bb.sync("source-github", {...}, "main", "bronze")                  │
-│       │                                                             │
-│       ▼                                                             │
-│  ┌───────────┐     ┌───────────┐     ┌──────────────────────────┐  │
-│  │  Airbyte  │────▶│ PyAirbyte │────▶│  Databricks Destination  │  │
-│  │  Source   │     │   Cache   │     │     (auto-configured)    │  │
-│  └───────────┘     └───────────┘     └────────────┬─────────────┘  │
-│                                                   │                 │
-│                                                   ▼                 │
-│                                       ┌──────────────────────────┐  │
-│                                       │   Unity Catalog Tables   │  │
-│                                       │   _airbyte_raw_<stream>  │  │
-│                                       └──────────────────────────┘  │
-│                                                                     │
-└─────────────────────────────────────────────────────────────────────┘
-```
-
-## Data Format
-
-Data lands in raw tables with this schema:
-
-```sql
-CREATE TABLE _airbyte_raw_<stream_name> (
-    _airbyte_ab_id STRING,         -- Unique record identifier
-    _airbyte_emitted_at TIMESTAMP, -- When the record was extracted
-    _airbyte_data STRING           -- JSON payload
-)
-```
-
-Use Databricks SQL or dbt to transform into your preferred schema.
-
-## Sync Modes
-
-- **Full Refresh** (default) — Replaces all data in destination
-- **Incremental** — Only syncs new/updated records using state
+### Preview Before Sync
 
 ```python
-bb.sync(..., mode="incremental")
+preview = bb.preview(
+    source="source-github",
+    source_config={...},
+    catalog="main",
+    schema="bronze",
+)
+print(preview)
+```
+
+## Architecture
+
+### Hybrid Mode
+Brickbyte automatically selects the best write strategy:
+
+1. **Native Spark** (Default in Databricks Notebooks/Jobs)
+   - Uses `createDataFrame` + micro-batch writes to Delta
+   - **Fastest performance**. No Volume required.
+
+2. **SQL Streaming** (Remote / Local)
+   - Writes to Volume → `COPY INTO` via SQL Warehouse
+   - Robust remote execution. Requires `staging_volume`.
+
+```
+[In Notebook] ──▶ Spark createDataFrame ──▶ Delta Table (No Volume)
+
+[Remote]      ──▶ SQL Streaming ──▶ Volume ──▶ COPY INTO ──▶ Delta Table
 ```
 
 ## Requirements
 
 - Python 3.10+
 - Databricks workspace with Unity Catalog
-- Running SQL Warehouse (auto-discovered)
+- SQL Warehouse
+- Unity Catalog Volume for staging (Required only for Remote/SQL mode)
 
-## Contributing
+## Dependencies
 
-Contributions welcome! Please submit a Pull Request.
+```toml
+[project]
+dependencies = [
+  "virtualenv",
+  "databricks-sdk>=0.74.0",
+  "databricks-sql-connector>=4.2.2",
+  "airbyte>=0.34.0",
+  "pyarrow>=14.0.0",
+]
+
+[project.optional-dependencies]
+local-spark = ["delta-spark>=3.0.0", "pyspark>=3.5.0"]
+```
+
+For local Spark + Delta development:
+```bash
+pip install brickbyte[local-spark]
+```
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) for details.
-
----
-
-<p align="center">
-  Built with ❤️ for the Databricks community
-</p>
+Apache-2.0 License
