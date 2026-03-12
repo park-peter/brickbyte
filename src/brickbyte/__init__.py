@@ -17,7 +17,6 @@ class SyncResult:
     records_written: int
     streams_synced: List[str]
     failed_streams: List[str] = field(default_factory=list)
-    enriched_tables: List[str] = field(default_factory=list)
 
 
 def client(

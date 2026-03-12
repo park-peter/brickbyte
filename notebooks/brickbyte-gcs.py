@@ -245,8 +245,4 @@ print(f"Synced {result.records_written} records")
 #     },
 #     catalog="",  # TODO: Set your Unity Catalog name
 #     schema="",   # TODO: Set your target schema
-#     enrich_metadata=True,
-#     enrich_model="databricks-meta-llama-3-3-70b-instruct",
 # )
-
-# print(f"Enriched tables: {result.enriched_tables}")

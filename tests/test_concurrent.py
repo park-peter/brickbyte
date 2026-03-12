@@ -1,6 +1,7 @@
 """
 Tests for concurrent stream processing.
 """
+import threading
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -13,19 +14,52 @@ class TestConcurrentStreams:
     def bb(self, tmp_path):
         return brickbyte.client(base_venv_directory=str(tmp_path))
 
+    def _set_up_mock_sources(self, mock_airbyte, stream_records, stream_states=None):
+        stream_names = list(stream_records)
+
+        def make_source():
+            mock_source = MagicMock()
+            selected = {"streams": list(stream_names)}
+
+            def select_all_streams():
+                selected["streams"] = list(stream_names)
+
+            def select_streams(streams):
+                selected["streams"] = list(streams)
+
+            def get_selected_streams():
+                return list(selected["streams"])
+
+            def get_records(stream_name):
+                behavior = stream_records[stream_name]
+                if isinstance(behavior, Exception):
+                    raise behavior
+                return iter(behavior)
+
+            mock_source.select_all_streams.side_effect = select_all_streams
+            mock_source.select_streams.side_effect = select_streams
+            mock_source.get_selected_streams.side_effect = get_selected_streams
+            mock_source.get_records.side_effect = get_records
+            mock_source.check.return_value = None
+
+            if stream_states is not None:
+                mock_source.get_stream_state.side_effect = (
+                    lambda stream_name: stream_states[stream_name]
+                )
+
+            return mock_source
+
+        mock_airbyte.get_source.side_effect = lambda *args, **kwargs: make_source()
+
     def test_parallel_streams_each_get_own_writer(self, bb, mock_airbyte):
-        mock_source = MagicMock()
-        mock_airbyte.get_source.return_value = mock_source
-        mock_source.get_selected_streams.return_value = [
-            "stream1",
-            "stream2",
-            "stream3",
-        ]
-        mock_source.get_records.side_effect = [
-            [{"id": 1}],
-            [{"id": 2}],
-            [{"id": 3}],
-        ]
+        self._set_up_mock_sources(
+            mock_airbyte,
+            {
+                "stream1": [{"id": 1}],
+                "stream2": [{"id": 2}],
+                "stream3": [{"id": 3}],
+            },
+        )
 
         writers_created = []
 
@@ -51,14 +85,52 @@ class TestConcurrentStreams:
         # Each stream gets its own writer (in thread pool) + no sequential writer
         assert len(writers_created) == 3
 
+    def test_parallel_mode_completes_when_streams_exceed_workers(self, bb, mock_airbyte):
+        self._set_up_mock_sources(
+            mock_airbyte,
+            {
+                "stream1": [{"id": 1}],
+                "stream2": [{"id": 2}],
+                "stream3": [{"id": 3}],
+            },
+        )
+
+        result_holder = {}
+        error_holder = {}
+
+        with patch("brickbyte.writers.create_streaming_writer") as mock_factory:
+            mock_factory.return_value = MagicMock()
+
+            def run_sync():
+                try:
+                    result_holder["result"] = bb.sync(
+                        source="source-faker",
+                        source_config={},
+                        catalog="main",
+                        schema="test",
+                        staging_volume="main.staging.vol",
+                        mode="append",
+                        max_parallel_streams=2,
+                    )
+                except Exception as e:  # pragma: no cover - assertion below
+                    error_holder["error"] = e
+
+            thread = threading.Thread(target=run_sync, daemon=True)
+            thread.start()
+            thread.join(1)
+
+        assert thread.is_alive() is False
+        assert "error" not in error_holder
+        assert result_holder["result"].records_written == 3
+
     def test_error_propagation_with_continue_on_error_false(self, bb, mock_airbyte):
-        mock_source = MagicMock()
-        mock_airbyte.get_source.return_value = mock_source
-        mock_source.get_selected_streams.return_value = ["stream1", "stream2"]
-        mock_source.get_records.side_effect = [
-            RuntimeError("connection failed"),
-            [{"id": 1}],
-        ]
+        self._set_up_mock_sources(
+            mock_airbyte,
+            {
+                "stream1": RuntimeError("connection failed"),
+                "stream2": [{"id": 1}],
+            },
+        )
 
         with patch("brickbyte.writers.create_streaming_writer") as mock_factory:
             mock_writer = MagicMock()
@@ -77,10 +149,13 @@ class TestConcurrentStreams:
                 )
 
     def test_sequential_mode_uses_single_writer(self, bb, mock_airbyte):
-        mock_source = MagicMock()
-        mock_airbyte.get_source.return_value = mock_source
-        mock_source.get_selected_streams.return_value = ["stream1", "stream2"]
-        mock_source.get_records.side_effect = [[{"id": 1}], [{"id": 2}]]
+        self._set_up_mock_sources(
+            mock_airbyte,
+            {
+                "stream1": [{"id": 1}],
+                "stream2": [{"id": 2}],
+            },
+        )
 
         with patch(
             "brickbyte.writers.create_streaming_writer"
@@ -103,14 +178,17 @@ class TestConcurrentStreams:
         mock_factory.assert_called_once()
 
     def test_parallel_incremental_saves_state_per_stream(self, bb, mock_airbyte):
-        mock_source = MagicMock()
-        mock_airbyte.get_source.return_value = mock_source
-        mock_source.get_selected_streams.return_value = ["users", "orders"]
-        mock_source.get_records.side_effect = [
-            [{"id": 1}],
-            [{"id": 2}],
-        ]
-        mock_source.get_state.return_value = None
+        self._set_up_mock_sources(
+            mock_airbyte,
+            {
+                "users": [{"id": 1}],
+                "orders": [{"id": 2}],
+            },
+            stream_states={
+                "users": {"cursor": "users"},
+                "orders": {"cursor": "orders"},
+            },
+        )
 
         with patch("brickbyte._state.StateManager") as mock_state_manager_cls:
             mock_state_manager = MagicMock()

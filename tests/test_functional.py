@@ -139,7 +139,6 @@ class TestBrickbyteFunctional:
             records_written=100,
             streams_synced=["a", "b"],
             failed_streams=["c"],
-            enriched_tables=["a"],
         )
         assert result.records_written == 100
         assert len(result.streams_synced) == 2

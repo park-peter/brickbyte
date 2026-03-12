@@ -27,27 +27,14 @@ class TestStreamingWriter:
 
     def test_init_validation(self):
         with pytest.raises(ValueError):
-            with patch("os.path.exists", return_value=True):
-                SQLStreamingWriter(
-                    catalog="main",
-                    schema="test",
-                    staging_volume="invalid_format",
-                    server_hostname="h",
-                    http_path="p",
-                    access_token="t",
-                )
-
-    def test_volume_path_guard(self):
-        with patch("os.path.exists", return_value=False):
-            with pytest.raises(EnvironmentError, match="Volume path"):
-                SQLStreamingWriter(
-                    catalog="main",
-                    schema="test",
-                    staging_volume="main.staging.vol",
-                    server_hostname="h",
-                    http_path="p",
-                    access_token="t",
-                )
+            SQLStreamingWriter(
+                catalog="main",
+                schema="test",
+                staging_volume="invalid_format",
+                server_hostname="h",
+                http_path="p",
+                access_token="t",
+            )
 
     @patch("pyarrow.parquet.write_table")
     @patch("os.path.exists", return_value=True)
@@ -62,15 +49,20 @@ class TestStreamingWriter:
 
         writer.write_record("stream1", {"id": 2})
         assert len(writer._buffers["stream1"]) == 0
-        assert writer._execute.call_count == 2  # CREATE + COPY INTO
+        assert writer._execute.call_count == 4  # CREATE + PUT + COPY INTO + REMOVE
         mock_pq_write.assert_called_once()
         mock_remove.assert_called_once()
 
-        copy_call = writer._execute.call_args_list[1]
+        put_call = writer._execute.call_args_list[1]
+        assert "PUT" in put_call[0][0]
+
+        copy_call = writer._execute.call_args_list[2]
         query = copy_call[0][0]
         assert "COPY INTO" in query
-        # force=true should NOT be in the query
         assert "force" not in query.lower()
+
+        remove_call = writer._execute.call_args_list[3]
+        assert "REMOVE" in remove_call[0][0]
 
     @patch("pyarrow.parquet.write_table")
     @patch("os.remove")

@@ -153,7 +153,4 @@ bb_custom = brickbyte.client(secrets_scope="my-team-secrets")
 #     source_config={"count": 100},
 #     catalog="main",
 #     schema="bronze",
-#     enrich_metadata=True,
-#     enrich_model="databricks-meta-llama-3-3-70b-instruct",
 # )
-# print(f"Enriched tables: {result.enriched_tables}")

@@ -97,6 +97,27 @@ class Client:
                 f"Invalid mode '{mode}'. Must be one of: {', '.join(valid_modes)}"
             )
 
+    def _create_source_instance(
+        self,
+        ab_module: Any,
+        source: str,
+        source_config: dict,
+    ) -> Any:
+        """Create a configured Airbyte source instance."""
+        return ab_module.get_source(
+            source,
+            config=source_config,
+            local_executable=self._get_source_exec_path(source),
+        )
+
+    @staticmethod
+    def _select_streams(ab_source: Any, streams: Optional[List[str]]) -> None:
+        """Select requested streams on a source instance."""
+        if streams:
+            ab_source.select_streams(streams)
+        else:
+            ab_source.select_all_streams()
+
     def preview(
         self,
         source: str,
@@ -120,7 +141,7 @@ class Client:
             sample_size: Number of sample records per stream
 
         Returns:
-            PreviewResult with detailed comparison
+            PreviewResult with sampled source records, target counts, and schema changes
         """
         import airbyte as ab
 
@@ -132,17 +153,10 @@ class Client:
             logger.info(f"Setting up {source}...")
             self._setup_source(source, source_install)
 
-            ab_source = ab.get_source(
-                source,
-                config=merged_config,
-                local_executable=self._get_source_exec_path(source),
-            )
+            ab_source = self._create_source_instance(ab, source, merged_config)
             ab_source.check()
 
-            if streams:
-                ab_source.select_streams(streams)
-            else:
-                ab_source.select_all_streams()
+            self._select_streams(ab_source, streams)
 
             selected = list(ab_source.get_selected_streams())
 
@@ -169,8 +183,6 @@ class Client:
         streams: Optional[List[str]] = None,
         mode: str = "overwrite",
         flatten: bool = False,
-        enrich_metadata: bool = False,
-        enrich_model: Optional[str] = None,
         warehouse_id: Optional[str] = None,
         source_install: Optional[str] = None,
         cleanup: bool = False,
@@ -197,8 +209,6 @@ class Client:
             mode: Write mode ("overwrite" or "append")
             flatten: If True, flatten record fields into columns.
                     If False (default), store as JSON in 'data' column.
-            enrich_metadata: If True, use AI to generate column descriptions
-            enrich_model: Foundation Model endpoint for enrichment
             warehouse_id: SQL warehouse ID (optional, auto-discovered)
             source_install: Override source installation (e.g., custom git URL)
             cleanup: Whether to cleanup venvs after sync (default: False)
@@ -214,7 +224,7 @@ class Client:
             progress_callback: Optional callback for progress reporting
 
         Returns:
-            SyncResult with records_written, streams_synced, failed_streams, enriched_tables
+            SyncResult with records_written, streams_synced, failed_streams
         """
         import airbyte as ab
 
@@ -249,19 +259,12 @@ class Client:
             self._setup_source(source, source_install)
 
             logger.info(f"Configuring {source}...")
-            ab_source = ab.get_source(
-                source,
-                config=merged_config,
-                local_executable=self._get_source_exec_path(source),
-            )
+            ab_source = self._create_source_instance(ab, source, merged_config)
 
             logger.info("Validating source connection...")
             ab_source.check()
 
-            if streams:
-                ab_source.select_streams(streams)
-            else:
-                ab_source.select_all_streams()
+            self._select_streams(ab_source, streams)
 
             selected = list(ab_source.get_selected_streams())
 
@@ -312,7 +315,8 @@ class Client:
                         logger.info(
                             f"  Loaded incremental state for {stream_name}"
                         )
-                self._apply_incremental_state(ab_source, stream_states)
+                if max_parallel_streams == 1:
+                    self._apply_incremental_state(ab_source, stream_states)
 
             via_msg = f" via {staging_volume}" if staging_volume else " (Native Spark)"
             logger.info(
@@ -330,7 +334,6 @@ class Client:
             total_records = 0
             failed_streams: List[str] = []
             successful_streams: List[str] = []
-            lock = threading.Lock()
 
             # Common writer-creation kwargs used by both paths
             _writer_kwargs = dict(
@@ -348,180 +351,102 @@ class Client:
             if max_parallel_streams > 1:
                 import concurrent.futures
 
-                executor = concurrent.futures.ThreadPoolExecutor(
-                    max_workers=max_parallel_streams
-                )
-                futures = []
-                in_flight = 0
-                in_flight_lock = threading.Lock()
+                def _sync_stream_parallel(stream_name: str):
+                    """Sync a single stream in an isolated worker."""
+                    logger.info(f"  Streaming: {stream_name}")
+                    stream_source = self._create_source_instance(ab, source, merged_config)
+                    self._select_streams(stream_source, [stream_name])
+                    if incremental and stream_name in stream_states:
+                        self._apply_incremental_state(
+                            stream_source,
+                            {stream_name: stream_states[stream_name]},
+                        )
 
-                def _write_stream_records(stream_name, records_list, _run_id, _mode):
-                    """Write a list of records in a thread-owned writer."""
                     thread_writer = create_streaming_writer(**_writer_kwargs)
                     try:
-                        if _mode == "overwrite":
-                            thread_writer.safe_overwrite_begin(stream_name, _run_id)
+                        if mode == "overwrite":
+                            thread_writer.safe_overwrite_begin(stream_name, run_id)
 
-                        for record in records_list:
-                            thread_writer.write_record(stream_name, record)
-                        thread_writer.flush_stream(stream_name)
-
-                        if _mode == "overwrite":
-                            thread_writer.safe_overwrite_finish(stream_name, _run_id)
-
-                        return stream_name, len(records_list), thread_writer
-                    except Exception:
-                        thread_writer.close()
-                        with in_flight_lock:
-                            nonlocal in_flight
-                            in_flight -= 1
-                        raise
-
-                for stream_name in selected:
-                    logger.info(f"  Streaming: {stream_name}")
-
-                    try:
-                        records_generator = ab_source.get_records(stream_name)
-                        records_list = []
-                        accumulated_size = 0
-                        oversized = False
-
-                        for record in records_generator:
+                        count = 0
+                        for record in stream_source.get_records(stream_name):
                             if cancel_event and cancel_event.is_set():
                                 raise TimeoutError(
                                     f"Sync timed out after {timeout_seconds} seconds"
                                 )
 
-                            record_size = sum(
-                                len(str(v).encode("utf-8")) for v in record.values()
+                            thread_writer.write_record(stream_name, record)
+                            count += 1
+                            if progress_reporter and count % 5000 == 0:
+                                progress_reporter.record_processed(stream_name, count)
+
+                        thread_writer.flush_stream(stream_name)
+
+                        if mode == "overwrite":
+                            thread_writer.safe_overwrite_finish(stream_name, run_id)
+
+                        self._run_dedup_for_stream(
+                            stream_name,
+                            deduplicate,
+                            normalized_dedup_keys,
+                            flatten,
+                            catalog,
+                            schema,
+                            thread_writer,
+                        )
+
+                        state = None
+                        if incremental:
+                            state = self._extract_incremental_state(
+                                ab_source=stream_source,
+                                stream_name=stream_name,
+                                run_id=run_id,
+                                records_written=count,
                             )
-                            accumulated_size += record_size
-                            records_list.append(record)
 
-                            if accumulated_size >= buffer_size_mb * 1024 * 1024:
-                                oversized = True
-                                break
-
-                        if oversized:
-                            sync_writer = create_streaming_writer(**_writer_kwargs)
-                            try:
-                                if mode == "overwrite":
-                                    sync_writer.safe_overwrite_begin(stream_name, run_id)
-
-                                for rec in records_list:
-                                    sync_writer.write_record(stream_name, rec)
-                                count = len(records_list)
-                                for record in records_generator:
-                                    if cancel_event and cancel_event.is_set():
-                                        raise TimeoutError(
-                                            f"Sync timed out after {timeout_seconds} seconds"
-                                        )
-                                    sync_writer.write_record(stream_name, record)
-                                    count += 1
-                                    if progress_reporter and count % 5000 == 0:
-                                        progress_reporter.record_processed(stream_name, count)
-                                sync_writer.flush_stream(stream_name)
-
-                                if mode == "overwrite":
-                                    sync_writer.safe_overwrite_finish(stream_name, run_id)
-
-                                self._run_dedup_for_stream(
-                                    stream_name, deduplicate, normalized_dedup_keys,
-                                    flatten, catalog, schema, sync_writer,
-                                )
-
-                                with lock:
-                                    total_records += count
-                                    successful_streams.append(stream_name)
-
-                                if progress_reporter:
-                                    progress_reporter.stream_completed(stream_name, count)
-
-                                self._save_incremental_state(
-                                    state_manager=state_manager,
-                                    incremental=incremental,
-                                    ab_source=ab_source,
-                                    source=source,
-                                    stream_name=stream_name,
-                                    run_id=run_id,
-                                    records_written=count,
-                                )
-
-                                logger.info(f"    {count} records streamed (sync)")
-                            finally:
-                                sync_writer.close()
-                        else:
-                            import time
-
-                            while True:
-                                with in_flight_lock:
-                                    if in_flight < max_parallel_streams:
-                                        in_flight += 1
-                                        break
-                                time.sleep(0.01)
-
-                            future = executor.submit(
-                                _write_stream_records,
-                                stream_name,
-                                records_list,
-                                run_id,
-                                mode,
-                            )
-                            futures.append((stream_name, future))
-
+                        return stream_name, count, state
                     except Exception as e:
-                        error_name = type(e).__name__
                         logger.error(f"  Failed to stream {stream_name}: {e}")
-                        failed_streams.append(stream_name)
+                        raise
+                    finally:
+                        thread_writer.close()
 
-                        is_fatal = "ConnectorFailed" in error_name
-                        if is_fatal or not continue_on_error:
-                            for _, f in futures:
-                                f.cancel()
-                            raise
+                with concurrent.futures.ThreadPoolExecutor(
+                    max_workers=max_parallel_streams
+                ) as executor:
+                    future_to_stream = {
+                        executor.submit(_sync_stream_parallel, stream_name): stream_name
+                        for stream_name in selected
+                    }
 
-                # Collect results from futures
-                for stream_name, future in futures:
-                    try:
-                        _sname, count, thread_writer = future.result()
+                    for future in concurrent.futures.as_completed(future_to_stream):
+                        stream_name = future_to_stream[future]
                         try:
-                            self._run_dedup_for_stream(
-                                _sname, deduplicate, normalized_dedup_keys,
-                                flatten, catalog, schema, thread_writer,
-                            )
-                        finally:
-                            thread_writer.close()
-                            with in_flight_lock:
-                                in_flight -= 1
-
-                        with lock:
+                            _sname, count, state = future.result()
                             total_records += count
                             successful_streams.append(_sname)
 
-                        if progress_reporter:
-                            progress_reporter.stream_completed(_sname, count)
+                            if progress_reporter:
+                                progress_reporter.stream_completed(_sname, count)
 
-                        self._save_incremental_state(
-                            state_manager=state_manager,
-                            incremental=incremental,
-                            ab_source=ab_source,
-                            source=source,
-                            stream_name=_sname,
-                            run_id=run_id,
-                            records_written=count,
-                        )
+                            if incremental and state_manager is not None:
+                                state_manager.save_state(
+                                    source=source,
+                                    stream_name=_sname,
+                                    state=state,
+                                    run_id=run_id,
+                                )
 
-                        logger.info(f"    {count} records streamed")
-                    except Exception as e:
-                        logger.error(f"  Failed to stream {stream_name}: {e}")
-                        with lock:
+                            logger.info(f"    {count} records streamed")
+                        except Exception as e:
+                            error_name = type(e).__name__
                             failed_streams.append(stream_name)
-                        if not continue_on_error:
-                            for _, f in futures:
-                                f.cancel()
-                            raise
 
-                executor.shutdown(wait=True)
+                            is_fatal = "ConnectorFailed" in error_name
+                            if is_fatal or not continue_on_error:
+                                for pending in future_to_stream:
+                                    if pending is not future:
+                                        pending.cancel()
+                                raise
 
             else:
                 # Sequential processing (default)
@@ -609,34 +534,10 @@ class Client:
                         f"Sync failed. Failed streams: {failed_streams}"
                     )
 
-            enriched_tables = []
-            if enrich_metadata and successful_streams:
-                logger.info("Enriching metadata with AI...")
-                from brickbyte._sanitize import sanitize_stream_name as _sanitize
-                from brickbyte.enrichment import enrich_table
-
-                model = enrich_model or "databricks-meta-llama-3-3-70b-instruct"
-                for stream_name in successful_streams:
-                    try:
-                        sanitized = _sanitize(stream_name)
-                        enrich_table(
-                            catalog=catalog,
-                            schema=schema,
-                            table=sanitized,
-                            apply_to_catalog=True,
-                            model_name=model,
-                        )
-                        enriched_tables.append(stream_name)
-                    except Exception as e:
-                        logger.warning(
-                            f"  Warning: Could not enrich {stream_name}: {e}"
-                        )
-
             return SyncResult(
                 records_written=total_records,
                 streams_synced=successful_streams,
                 failed_streams=failed_streams,
-                enriched_tables=enriched_tables,
             )
 
         finally:

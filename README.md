@@ -15,8 +15,7 @@ brickbyte wraps [PyAirbyte](https://github.com/airbytehq/PyAirbyte) to extract d
 - **Concurrent Streams** - Parallel writes with isolated per-thread writers
 - **Progress Reporting** - Callback events every 5000 records plus per-stream completion
 - **Timeout Control** - Cooperative timeout for long-running syncs
-- **AI Enrichment** - Column descriptions, PII detection via Foundation Models
-- **Preview** - Schema comparison before committing
+- **Preview** - Sample-based schema comparison before committing
 
 ## Quick Start
 
@@ -167,18 +166,6 @@ result = bb.sync(
 )
 ```
 
-### AI Metadata Enrichment
-
-```python
-result = bb.sync(
-    source="source-faker",
-    source_config={"count": 100},
-    catalog="main",
-    schema="bronze",
-    enrich_metadata=True,
-)
-```
-
 ### Preview
 
 ```python
@@ -190,6 +177,8 @@ preview = bb.preview(
 )
 print(preview)
 ```
+
+Preview reports sampled source records, current target counts, and inferred schema changes.
 
 ## Credential Management
 
@@ -222,7 +211,7 @@ Supports dotted keys for nested config (`source-x/credentials.client_id` maps to
 ## Development
 
 ```bash
-uv pip install -e ".[dev]"
+uv sync --extra dev
 uv run pytest tests/ -v -m "not integration"
 uv run ruff check src/
 ```

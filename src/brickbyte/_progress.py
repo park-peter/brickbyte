@@ -1,6 +1,7 @@
 """
 Progress reporting for brickbyte sync operations.
 """
+import threading
 import time
 from dataclasses import dataclass
 from typing import Callable, Optional
@@ -34,6 +35,7 @@ class ProgressReporter:
         self._start_time = time.monotonic()
         self._tqdm_bar = None
         self._records_by_stream: dict = {}
+        self._lock = threading.Lock()
 
         if use_tqdm or self._is_notebook():
             try:
@@ -61,22 +63,26 @@ class ProgressReporter:
 
     def record_processed(self, stream_name: str, count: int):
         """Called periodically during record processing."""
-        self._records_by_stream[stream_name] = count
+        with self._lock:
+            self._records_by_stream[stream_name] = count
+            streams_completed = self.streams_completed
 
         if count % 5000 == 0 and self.callback:
             event = ProgressEvent(
                 stream_name=stream_name,
                 records_processed=count,
                 total_streams=self.total_streams,
-                streams_completed=self.streams_completed,
+                streams_completed=streams_completed,
                 elapsed_seconds=time.monotonic() - self._start_time,
             )
             self.callback(event)
 
     def stream_completed(self, stream_name: str, records: int):
         """Called when a stream finishes."""
-        self.streams_completed += 1
-        self._records_by_stream[stream_name] = records
+        with self._lock:
+            self.streams_completed += 1
+            self._records_by_stream[stream_name] = records
+            streams_completed = self.streams_completed
 
         if self._tqdm_bar:
             self._tqdm_bar.update(1)
@@ -89,7 +95,7 @@ class ProgressReporter:
                 stream_name=stream_name,
                 records_processed=records,
                 total_streams=self.total_streams,
-                streams_completed=self.streams_completed,
+                streams_completed=streams_completed,
                 elapsed_seconds=time.monotonic() - self._start_time,
             )
             self.callback(event)

@@ -1,6 +1,6 @@
 """
 Preview engine for brickbyte.
-Provides diff calculation and schema comparison before syncing.
+Provides sample-based schema comparison before syncing.
 """
 import logging
 from dataclasses import dataclass, field
@@ -47,31 +47,16 @@ class StreamPreview:
     """Preview information for a single stream."""
 
     stream_name: str
-    source_count: int
+    sampled_records: int
     target_count: int
-    new_records: int = 0
-    modified_records: int = 0
-    deleted_records: int = 0
     schema_changes: List[SchemaChange] = field(default_factory=list)
     sample_records: List[dict] = field(default_factory=list)
 
     def __str__(self) -> str:
-        parts = []
-
-        if self.new_records > 0:
-            parts.append(f"+{self.new_records} new")
-        if self.modified_records > 0:
-            parts.append(f"~{self.modified_records} modified")
-        if self.deleted_records > 0:
-            parts.append(f"-{self.deleted_records} deleted")
-
-        if not parts:
-            if self.source_count >= 0:
-                parts.append(f"{self.source_count} records")
-            else:
-                parts.append("Unknown records (Streaming)")
-
-        line = f"{self.stream_name}: {' | '.join(parts)}"
+        line = (
+            f"{self.stream_name}: sampled {self.sampled_records} records"
+            f" | target has {self.target_count} records"
+        )
 
         if self.schema_changes:
             line += "\n  Schema changes:"
@@ -86,10 +71,8 @@ class PreviewResult:
     """Complete preview result for all streams."""
 
     streams: List[StreamPreview] = field(default_factory=list)
-    total_source_records: int = 0
-    total_new_records: int = 0
-    total_modified_records: int = 0
-    total_deleted_records: int = 0
+    total_sampled_records: int = 0
+    total_target_records: int = 0
     has_schema_changes: bool = False
 
     def __str__(self) -> str:
@@ -101,10 +84,9 @@ class PreviewResult:
         lines.append("")
         lines.append("-" * 60)
         lines.append(
-            f"Total: {self.total_source_records} records "
-            f"(+{self.total_new_records} new, "
-            f"~{self.total_modified_records} modified, "
-            f"-{self.total_deleted_records} deleted)"
+            f"Total: sampled {self.total_sampled_records} records "
+            f"across {len(self.streams)} streams "
+            f"| target has {self.total_target_records} records"
         )
 
         if self.has_schema_changes:
@@ -119,9 +101,9 @@ class PreviewEngine:
     """
     Generates previews of sync operations.
 
-    Compares source data (sampled) with existing target tables to show:
+    Samples source data and compares it with existing target tables to show:
     - Target record counts
-    - Schema changes (inferred from samples)
+    - Schema changes inferred from samples
     - Sample records
     """
 
@@ -269,11 +251,8 @@ class PreviewEngine:
 
         return StreamPreview(
             stream_name=stream_name,
-            source_count=-1,
+            sampled_records=len(sample_records),
             target_count=target_count,
-            new_records=-1,
-            modified_records=-1,
-            deleted_records=-1,
             schema_changes=schema_changes,
             sample_records=sample_records,
         )
@@ -290,6 +269,8 @@ class PreviewEngine:
         for stream_name in streams:
             stream_preview = self.preview_stream(ab_source, stream_name, sample_size)
             result.streams.append(stream_preview)
+            result.total_sampled_records += stream_preview.sampled_records
+            result.total_target_records += stream_preview.target_count
 
             if stream_preview.schema_changes:
                 result.has_schema_changes = True

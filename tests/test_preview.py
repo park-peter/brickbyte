@@ -44,30 +44,22 @@ class TestSchemaChange:
 
 class TestStreamPreview:
     def test_str_with_counts(self):
-        preview = StreamPreview(
-            stream_name="users",
-            source_count=100,
-            target_count=50,
-            new_records=30,
-            modified_records=10,
-            deleted_records=5,
-        )
+        preview = StreamPreview(stream_name="users", sampled_records=5, target_count=50)
         result = str(preview)
         assert "users" in result
-        assert "+30 new" in result
-        assert "~10 modified" in result
-        assert "-5 deleted" in result
+        assert "sampled 5 records" in result
+        assert "target has 50 records" in result
 
     def test_str_streaming_unknown_count(self):
-        preview = StreamPreview(stream_name="events", source_count=-1, target_count=0)
+        preview = StreamPreview(stream_name="events", sampled_records=0, target_count=0)
         result = str(preview)
         assert "events" in result
-        assert "Unknown" in result or "Streaming" in result
+        assert "sampled 0 records" in result
 
     def test_str_with_schema_changes(self):
         preview = StreamPreview(
             stream_name="orders",
-            source_count=50,
+            sampled_records=2,
             target_count=40,
             schema_changes=[
                 SchemaChange(column="new_field", change_type="added", source_type="str"),
@@ -82,22 +74,23 @@ class TestPreviewResult:
     def test_str_output(self):
         result = PreviewResult(
             streams=[
-                StreamPreview("users", 100, 50, new_records=30),
-                StreamPreview("orders", 200, 150, new_records=20),
+                StreamPreview("users", 5, 50),
+                StreamPreview("orders", 3, 150),
             ],
-            total_source_records=300,
-            total_new_records=50,
+            total_sampled_records=8,
+            total_target_records=200,
             has_schema_changes=True,
         )
         output = str(result)
         assert "Sync Preview" in output
         assert "users" in output
         assert "orders" in output
+        assert "sampled 8 records" in output
         assert "Schema changes detected" in output
 
     def test_str_no_schema_changes(self):
         result = PreviewResult(
-            streams=[StreamPreview("data", 10, 10)], has_schema_changes=False
+            streams=[StreamPreview("data", 1, 10)], has_schema_changes=False
         )
         output = str(result)
         assert "Schema changes detected" not in output
@@ -191,13 +184,19 @@ class TestPreviewEngine:
         preview = engine.preview_stream(mock_source, "users", sample_size=5)
         assert preview.stream_name == "users"
         assert preview.target_count == 100
+        assert preview.sampled_records == 2
         assert len(preview.sample_records) == 2
 
     def test_preview_all_streams(self, engine):
         engine._spark.catalog.tableExists.return_value = False
         mock_source = MagicMock()
-        mock_source.get_records.return_value = iter([{"id": 1}])
+        mock_source.get_records.side_effect = [
+            iter([{"id": 1}]),
+            iter([{"id": 2}]),
+        ]
         result = engine.preview(mock_source, ["stream1", "stream2"])
         assert len(result.streams) == 2
+        assert result.total_sampled_records == 2
+        assert result.total_target_records == 0
         assert result.streams[0].stream_name == "stream1"
         assert result.streams[1].stream_name == "stream2"

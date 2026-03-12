@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import shutil
+import tempfile
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 from uuid import uuid4
@@ -58,6 +59,7 @@ class SQLStreamingWriter(BaseWriter):
         self._buffer_sizes: Dict[str, int] = {}
         self._batch_index: int = 0
         self._overwrite_streams: Dict[str, str] = {}
+        self._local_staging_root = tempfile.mkdtemp(prefix="brickbyte-sql-")
 
         parts = self.staging_volume.split(".")
         if len(parts) != 3:
@@ -66,15 +68,6 @@ class SQLStreamingWriter(BaseWriter):
                 f"got: {self.staging_volume}"
             )
         self._vol_subpath = os.path.join(parts[0], parts[1], parts[2])
-
-        # Validate Volume path exists
-        vol_base = f"/Volumes/{self._vol_subpath}"
-        if not os.path.exists(vol_base):
-            raise EnvironmentError(
-                f"Volume path '{vol_base}' does not exist. "
-                f"Ensure you are running on Databricks and the Volume "
-                f"'{self.staging_volume}' has been created in Unity Catalog."
-            )
 
     def _get_connection(self):
         """Get or create database connection."""
@@ -87,6 +80,7 @@ class SQLStreamingWriter(BaseWriter):
                 access_token=self._access_token,
                 catalog=self.catalog,
                 schema=self.schema,
+                staging_allowed_local_path=self._local_staging_root,
             )
         return self._connection
 
@@ -100,14 +94,20 @@ class SQLStreamingWriter(BaseWriter):
             cursor.close()
 
     def _get_staging_dir(self, stream_name: str) -> str:
-        """Get staging directory path in Volume."""
+        """Get local staging directory path for parquet generation."""
         from brickbyte._sanitize import sanitize_stream_name
 
         sanitized = sanitize_stream_name(stream_name)
-        base_path = f"/Volumes/{self._vol_subpath}"
-        stream_dir = os.path.join(base_path, "brickbyte_streaming", sanitized)
+        stream_dir = os.path.join(self._local_staging_root, sanitized)
         os.makedirs(stream_dir, exist_ok=True)
         return stream_dir
+
+    def _get_volume_dir(self, stream_name: str) -> str:
+        """Get destination directory path inside the Unity Catalog Volume."""
+        from brickbyte._sanitize import sanitize_stream_name
+
+        sanitized = sanitize_stream_name(stream_name)
+        return f"/Volumes/{self._vol_subpath}/brickbyte_streaming/{self.run_id}/{sanitized}"
 
     def table_exists(self, stream_name: str) -> bool:
         table_name = self.get_table_name(stream_name)
@@ -218,9 +218,11 @@ class SQLStreamingWriter(BaseWriter):
         records = self._buffers[stream_name]
         table_name = self._get_write_table_name(stream_name)
 
-        staging_dir = self._get_staging_dir(stream_name)
+        local_staging_dir = self._get_staging_dir(stream_name)
+        volume_staging_dir = self._get_volume_dir(stream_name)
         filename = f"{self.run_id}_{self._batch_index:06d}.parquet"
-        file_path = os.path.join(staging_dir, filename)
+        file_path = os.path.join(local_staging_dir, filename)
+        volume_file_path = f"{volume_staging_dir}/{filename}"
         self._batch_index += 1
 
         try:
@@ -236,9 +238,10 @@ class SQLStreamingWriter(BaseWriter):
                     ddl = self._infer_ddl_from_arrow(table.schema, table_name)
                     self._execute(ddl)
 
+            self._execute(f"PUT '{file_path}' INTO '{volume_file_path}' OVERWRITE")
             copy_query = f"""
             COPY INTO {table_name}
-            FROM '{file_path}'
+            FROM '{volume_file_path}'
             FILEFORMAT = PARQUET
             FORMAT_OPTIONS ('mergeSchema' = 'true')
             """
@@ -248,6 +251,10 @@ class SQLStreamingWriter(BaseWriter):
             logger.error(f"Error flushing stream {stream_name}: {e}")
             raise
         finally:
+            try:
+                self._execute(f"REMOVE '{volume_file_path}'")
+            except Exception:
+                pass
             # Always clean up the parquet file
             if os.path.exists(file_path):
                 os.remove(file_path)
@@ -302,6 +309,9 @@ class SQLStreamingWriter(BaseWriter):
         if self._connection:
             self._connection.close()
             self._connection = None
+
+        if os.path.exists(self._local_staging_root):
+            shutil.rmtree(self._local_staging_root, ignore_errors=True)
 
     def safe_overwrite_begin(self, stream_name: str, run_id: str):
         """Begin safe overwrite — redirect writes to staging table."""
