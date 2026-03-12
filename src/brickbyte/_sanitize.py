@@ -1,6 +1,7 @@
 """
 Stream name sanitization and SQL identifier validation for brickbyte.
 """
+
 import re
 
 
@@ -42,8 +43,7 @@ def validate_identifier(name: str) -> str:
     dangerous = re.search(r"[\x00`;]", name)
     if dangerous:
         raise ValueError(
-            f"Identifier '{name}' contains unsafe character: "
-            f"{repr(dangerous.group())}"
+            f"Identifier '{name}' contains unsafe character: " f"{repr(dangerous.group())}"
         )
 
     return name

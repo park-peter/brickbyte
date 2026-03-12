@@ -6,6 +6,7 @@ Uses micro-batch streaming for:
 - Fault tolerance (each flush = implicit checkpoint)
 - Databricks auto-optimize handles small file compaction
 """
+
 import json
 import logging
 from datetime import datetime, timezone
@@ -141,9 +142,7 @@ class SparkStreamingWriter(BaseWriter):
                 len(str(v).encode("utf-8")) for v in transformed.values()
             )
         else:
-            self._buffer_sizes[stream_name] += len(
-                transformed["data"].encode("utf-8")
-            )
+            self._buffer_sizes[stream_name] += len(transformed["data"].encode("utf-8"))
 
         # Flush micro-batch when thresholds hit
         if (
@@ -215,9 +214,7 @@ class SparkStreamingWriter(BaseWriter):
                 self._atomic_overwrite(target_name, staging_name)
                 self.spark.sql(f"DROP TABLE IF EXISTS {staging_name}")
             else:
-                self.spark.sql(
-                    f"ALTER TABLE {staging_name} RENAME TO {target_name}"
-                )
+                self.spark.sql(f"ALTER TABLE {staging_name} RENAME TO {target_name}")
         except Exception:
             # On failure, drop staging table, target untouched
             self.spark.sql(f"DROP TABLE IF EXISTS {staging_name}")
@@ -255,9 +252,7 @@ class SparkStreamingWriter(BaseWriter):
         new_cols = staging_cols - target_cols
         for col in new_cols:
             col_type = self._sql_type(staging_schema[col])
-            self.spark.sql(
-                f"ALTER TABLE {target_name} ADD COLUMNS (`{col}` {col_type})"
-            )
+            self.spark.sql(f"ALTER TABLE {target_name} ADD COLUMNS (`{col}` {col_type})")
 
         all_cols = target_cols | staging_cols
         select_parts = []
@@ -267,9 +262,7 @@ class SparkStreamingWriter(BaseWriter):
                 t_type = self._type_name(target_schema[col])
                 if s_type != t_type and (s_type, t_type) in self._SAFE_WIDENINGS:
                     target_sql_type = self._sql_type(target_schema[col])
-                    select_parts.append(
-                        f"CAST(`{col}` AS {target_sql_type}) AS `{col}`"
-                    )
+                    select_parts.append(f"CAST(`{col}` AS {target_sql_type}) AS `{col}`")
                 elif s_type != t_type and (t_type, s_type) in self._SAFE_WIDENINGS:
                     staging_sql_type = self._sql_type(staging_schema[col])
                     self.spark.sql(
@@ -311,7 +304,7 @@ class SparkStreamingWriter(BaseWriter):
         if as_str.endswith("()"):
             as_str = as_str[:-2]
         if as_str.startswith("DecimalType(") and as_str.endswith(")"):
-            precision_scale = as_str[len("DecimalType("):-1]
+            precision_scale = as_str[len("DecimalType(") : -1]
             return f"DECIMAL({precision_scale})"
         mapping = {
             "ByteType": "TINYINT",

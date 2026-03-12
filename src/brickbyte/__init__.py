@@ -1,6 +1,7 @@
 """
 brickbyte - Sync data from 600+ sources directly into Databricks.
 """
+
 import logging
 from dataclasses import dataclass, field
 from typing import List

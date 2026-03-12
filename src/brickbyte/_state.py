@@ -3,6 +3,7 @@ Incremental sync state management for brickbyte.
 
 Manages the `__brickbyte_state` table to track sync state per (source, stream) pair.
 """
+
 import json
 import logging
 from typing import Optional
@@ -108,9 +109,7 @@ class StateManager:
         wh_id = self._warehouse_id
         if not wh_id:
             warehouses = list(w.warehouses.list())
-            running = [
-                wh for wh in warehouses if wh.state and wh.state.value == "RUNNING"
-            ]
+            running = [wh for wh in warehouses if wh.state and wh.state.value == "RUNNING"]
             if running:
                 wh_id = running[0].id
             else:
@@ -177,9 +176,7 @@ class StateManager:
 
             df = (
                 spark.table(self._state_table)
-                .filter(
-                    (col("source") == source) & (col("stream_name") == stream_name)
-                )
+                .filter((col("source") == source) & (col("stream_name") == stream_name))
                 .select("state")
                 .limit(1)
             )

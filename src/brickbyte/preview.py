@@ -2,6 +2,7 @@
 Preview engine for brickbyte.
 Provides sample-based schema comparison before syncing.
 """
+
 import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional

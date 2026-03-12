@@ -6,6 +6,7 @@ Uses micro-batch streaming for:
 - Fault tolerance (each flush = implicit checkpoint)
 - Databricks auto-optimize handles small file compaction
 """
+
 import json
 import logging
 import os
@@ -193,9 +194,7 @@ class SQLStreamingWriter(BaseWriter):
                 len(str(v).encode("utf-8")) for v in transformed.values()
             )
         else:
-            self._buffer_sizes[stream_name] += len(
-                transformed["data"].encode("utf-8")
-            )
+            self._buffer_sizes[stream_name] += len(transformed["data"].encode("utf-8"))
 
         # Check both thresholds
         if (
@@ -334,9 +333,7 @@ class SQLStreamingWriter(BaseWriter):
                 self._atomic_overwrite_sql(target_name, staging_name)
                 self._execute(f"DROP TABLE IF EXISTS {staging_name}")
             else:
-                self._execute(
-                    f"ALTER TABLE {staging_name} RENAME TO {target_name}"
-                )
+                self._execute(f"ALTER TABLE {staging_name} RENAME TO {target_name}")
         except Exception:
             self._execute(f"DROP TABLE IF EXISTS {staging_name}")
             raise
@@ -393,9 +390,7 @@ class SQLStreamingWriter(BaseWriter):
         new_cols = staging_cols - target_cols
         for col in new_cols:
             col_type = staging_schema[col]
-            self._execute(
-                f"ALTER TABLE {target_name} ADD COLUMNS (`{col}` {col_type})"
-            )
+            self._execute(f"ALTER TABLE {target_name} ADD COLUMNS (`{col}` {col_type})")
 
         all_cols = target_cols | staging_cols
         select_parts = []
@@ -406,9 +401,7 @@ class SQLStreamingWriter(BaseWriter):
                 if s_type != t_type:
                     # Always widen to the wider type
                     if (s_type, t_type) in self._SAFE_WIDENINGS_SQL:
-                        select_parts.append(
-                            f"CAST(`{col}` AS {target_schema[col]}) AS `{col}`"
-                        )
+                        select_parts.append(f"CAST(`{col}` AS {target_schema[col]}) AS `{col}`")
                     elif (t_type, s_type) in self._SAFE_WIDENINGS_SQL:
                         # Staging is wider — widen target to match
                         self._execute(

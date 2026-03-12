@@ -1,6 +1,7 @@
 """
 Progress reporting for brickbyte sync operations.
 """
+
 import threading
 import time
 from dataclasses import dataclass
@@ -86,9 +87,7 @@ class ProgressReporter:
 
         if self._tqdm_bar:
             self._tqdm_bar.update(1)
-            self._tqdm_bar.set_postfix(
-                stream=stream_name, records=records
-            )
+            self._tqdm_bar.set_postfix(stream=stream_name, records=records)
 
         if self.callback:
             event = ProgressEvent(

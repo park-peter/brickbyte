@@ -3,6 +3,7 @@ Deduplication logic for brickbyte.
 
 Uses MERGE to remove duplicate records based on user-specified keys.
 """
+
 import logging
 from typing import List
 
@@ -47,9 +48,7 @@ def deduplicate_stream(
     validated_record_id_col = validate_identifier(record_id_col)
     validated_dk_missing_col = validate_identifier(dk_missing_col)
 
-    key_match = " AND ".join(
-        f"t.`{col}` <=> s.`{col}`" for col in validated_keys
-    )
+    key_match = " AND ".join(f"t.`{col}` <=> s.`{col}`" for col in validated_keys)
 
     # Build the dedup MERGE statement
     # This keeps only the latest record per key combo

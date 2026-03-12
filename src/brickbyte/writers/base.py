@@ -2,6 +2,7 @@
 Abstract base writer for brickbyte.
 Defines the interface all writers must implement.
 """
+
 from abc import ABC, abstractmethod
 from typing import Dict, List, Optional
 

@@ -4,6 +4,7 @@ Credential management for brickbyte.
 Provides automatic credential resolution from Databricks Secrets
 with optional YAML profiles for advanced use cases.
 """
+
 import logging
 import re
 from typing import Any, Dict, List, Optional
@@ -75,9 +76,7 @@ class CredentialResolver:
 
             # Filter keys that start with the source name
             prefix = f"{source}/"
-            return [
-                key[len(prefix) :] for key in self._available_keys if key.startswith(prefix)
-            ]
+            return [key[len(prefix) :] for key in self._available_keys if key.startswith(prefix)]
         except Exception as e:
             logger.debug(f"Could not list secrets: {e}")
             return []
@@ -201,9 +200,7 @@ class CredentialResolver:
             profile_name = self._mappings[source]
             credentials = self._resolve_profile(profile_name)
             if credentials:
-                logger.debug(
-                    f"Resolved credentials for {source} from profile '{profile_name}'"
-                )
+                logger.debug(f"Resolved credentials for {source} from profile '{profile_name}'")
 
         # Fall back to convention-based discovery
         if not credentials:
@@ -216,9 +213,7 @@ class CredentialResolver:
                     self._set_nested(credentials, key, value)
 
             if credentials:
-                logger.debug(
-                    f"Discovered {len(credentials)} credentials for {source} from secrets"
-                )
+                logger.debug(f"Discovered {len(credentials)} credentials for {source} from secrets")
 
         # Cache the result
         self._cache[source] = credentials

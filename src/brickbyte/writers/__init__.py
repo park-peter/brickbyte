@@ -1,6 +1,7 @@
 """
 brickbyte Writers Module.
 """
+
 import logging
 from typing import Dict, List, Optional
 
@@ -81,8 +82,7 @@ def create_streaming_writer(
             warehouse_id = running[0].id
         else:
             raise ValueError(
-                "No running SQL warehouse found. "
-                "Specify warehouse_id or start a warehouse."
+                "No running SQL warehouse found. " "Specify warehouse_id or start a warehouse."
             )
 
     http_path = f"/sql/1.0/warehouses/{warehouse_id}"

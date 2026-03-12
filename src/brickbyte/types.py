@@ -103,5 +103,5 @@ Source = Literal[
     "source-youtube-analytics",
     "source-zendesk-chat",
     "source-zendesk-support",
-    "source-zenloop"
+    "source-zenloop",
 ]

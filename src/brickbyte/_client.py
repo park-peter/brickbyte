@@ -1,6 +1,7 @@
 """
 Internal Client class for brickbyte.
 """
+
 import logging
 import os
 import shutil
@@ -93,9 +94,7 @@ class Client:
         if mode not in valid_modes:
             if mode == "merge":
                 raise NotImplementedError("Merge mode is not yet supported.")
-            raise ValueError(
-                f"Invalid mode '{mode}'. Must be one of: {', '.join(valid_modes)}"
-            )
+            raise ValueError(f"Invalid mode '{mode}'. Must be one of: {', '.join(valid_modes)}")
 
     def _create_source_instance(
         self,
@@ -312,16 +311,12 @@ class Client:
                     saved = state_manager.get_state(source, stream_name)
                     if saved is not None:
                         stream_states[stream_name] = saved
-                        logger.info(
-                            f"  Loaded incremental state for {stream_name}"
-                        )
+                        logger.info(f"  Loaded incremental state for {stream_name}")
                 if max_parallel_streams == 1:
                     self._apply_incremental_state(ab_source, stream_states)
 
             via_msg = f" via {staging_volume}" if staging_volume else " (Native Spark)"
-            logger.info(
-                f"Streaming {len(selected)} streams to {catalog}.{schema}{via_msg}..."
-            )
+            logger.info(f"Streaming {len(selected)} streams to {catalog}.{schema}{via_msg}...")
 
             if progress_callback is not None:
                 from brickbyte._progress import ProgressReporter
@@ -476,11 +471,7 @@ class Client:
                             if count % 10000 == 0:
                                 logger.info(f"    ...streamed {count} records")
 
-                            if (
-                                cancel_event
-                                and count % 1000 == 0
-                                and cancel_event.is_set()
-                            ):
+                            if cancel_event and count % 1000 == 0 and cancel_event.is_set():
                                 raise TimeoutError(
                                     f"Sync timed out after {timeout_seconds} seconds"
                                 )
@@ -491,8 +482,13 @@ class Client:
                             writer.safe_overwrite_finish(stream_name, run_id)
 
                         self._run_dedup_for_stream(
-                            stream_name, deduplicate, normalized_dedup_keys,
-                            flatten, catalog, schema, writer,
+                            stream_name,
+                            deduplicate,
+                            normalized_dedup_keys,
+                            flatten,
+                            catalog,
+                            schema,
+                            writer,
                         )
 
                         logger.info(f"    {count} records streamed")
@@ -526,13 +522,10 @@ class Client:
             if failed_streams:
                 if continue_on_error:
                     logger.warning(
-                        f"Completed with {len(failed_streams)} failed streams: "
-                        f"{failed_streams}"
+                        f"Completed with {len(failed_streams)} failed streams: " f"{failed_streams}"
                     )
                 else:
-                    raise RuntimeError(
-                        f"Sync failed. Failed streams: {failed_streams}"
-                    )
+                    raise RuntimeError(f"Sync failed. Failed streams: {failed_streams}")
 
             return SyncResult(
                 records_written=total_records,
@@ -620,9 +613,7 @@ class Client:
         if isinstance(dedup_keys, dict):
             for stream_name, keys in dedup_keys.items():
                 if not isinstance(keys, list) or len(keys) == 0:
-                    raise ValueError(
-                        f"dedup_keys for stream '{stream_name}' must be non-empty"
-                    )
+                    raise ValueError(f"dedup_keys for stream '{stream_name}' must be non-empty")
                 self._validate_dedup_key_list(
                     keys,
                     context=f"dedup_keys for stream '{stream_name}'",
@@ -659,9 +650,7 @@ class Client:
             try:
                 for stream_name, state in stream_states.items():
                     method(stream_name, state)
-                logger.info(
-                    f"Applied incremental state for {len(stream_states)} stream(s)"
-                )
+                logger.info(f"Applied incremental state for {len(stream_states)} stream(s)")
                 return
             except TypeError:
                 continue
@@ -680,9 +669,7 @@ class Client:
             for payload in (state_payload, stream_states):
                 try:
                     set_state(payload)
-                    logger.info(
-                        f"Applied incremental state for {len(stream_states)} stream(s)"
-                    )
+                    logger.info(f"Applied incremental state for {len(stream_states)} stream(s)")
                     return
                 except TypeError:
                     continue
