@@ -1,6 +1,6 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # BrickByte - Confluence Example
+# MAGIC # brickbyte - Confluence Example
 # MAGIC 
 # MAGIC Sync data from Atlassian Confluence to Databricks.
 # MAGIC 
@@ -14,9 +14,9 @@
 
 # COMMAND ----------
 
-from brickbyte import Brickbyte
+import brickbyte
 
-bb = Brickbyte()
+bb = brickbyte.client()
 
 # COMMAND ----------
 

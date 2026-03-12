@@ -4,7 +4,7 @@
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC # Google Cloud Storage (GCS) to Databricks with BrickByte
+# MAGIC # Google Cloud Storage (GCS) to Databricks with brickbyte
 # MAGIC 
 # MAGIC This notebook syncs files from Google Cloud Storage to Delta Lake tables in Unity Catalog.
 # MAGIC 
@@ -17,9 +17,9 @@
 
 # COMMAND ----------
 
-from brickbyte import Brickbyte
+import brickbyte
 
-bb = Brickbyte()
+bb = brickbyte.client()
 
 # COMMAND ----------
 
@@ -245,8 +245,4 @@ print(f"Synced {result.records_written} records")
 #     },
 #     catalog="",  # TODO: Set your Unity Catalog name
 #     schema="",   # TODO: Set your target schema
-#     enrich_metadata=True,
-#     enrich_model="databricks-meta-llama-3-3-70b-instruct",
 # )
-
-# print(f"Enriched tables: {result.enriched_tables}")

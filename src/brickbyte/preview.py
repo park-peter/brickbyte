@@ -1,20 +1,39 @@
 """
-Preview engine for BrickByte.
-Provides diff calculation and schema comparison before syncing.
+Preview engine for brickbyte.
+Provides sample-based schema comparison before syncing.
 """
+
+import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger("brickbyte")
+
+# Mapping from Python types to approximate Spark types for comparison
+_PYTHON_TO_SPARK = {
+    "int": "LongType",
+    "float": "DoubleType",
+    "str": "StringType",
+    "bool": "BooleanType",
+    "NoneType": "NullType",
+    "list": "ArrayType",
+    "dict": "MapType",
+    "datetime": "TimestampType",
+    "date": "DateType",
+    "bytes": "BinaryType",
+    "Decimal": "DecimalType",
+}
 
 
 @dataclass
 class SchemaChange:
     """Represents a schema change between source and target."""
-    
+
     column: str
     change_type: str  # "added", "removed", "type_changed"
     source_type: Optional[str] = None
     target_type: Optional[str] = None
-    
+
     def __str__(self) -> str:
         if self.change_type == "added":
             return f"  + {self.column} ({self.source_type}) - NEW"
@@ -27,184 +46,186 @@ class SchemaChange:
 @dataclass
 class StreamPreview:
     """Preview information for a single stream."""
-    
+
     stream_name: str
-    source_count: int
+    sampled_records: int
     target_count: int
-    new_records: int = 0
-    modified_records: int = 0
-    deleted_records: int = 0
     schema_changes: List[SchemaChange] = field(default_factory=list)
     sample_records: List[dict] = field(default_factory=list)
-    
+
     def __str__(self) -> str:
-        parts = []
-        
-        # Record counts
-        if self.new_records > 0:
-            parts.append(f"+{self.new_records} new")
-        if self.modified_records > 0:
-            parts.append(f"~{self.modified_records} modified")
-        if self.deleted_records > 0:
-            parts.append(f"-{self.deleted_records} deleted")
-        
-        if not parts:
-            if self.source_count >= 0:
-                parts.append(f"{self.source_count} records")
-            else:
-                parts.append("Unknown records (Streaming)")
-        
-        line = f"{self.stream_name}: {' | '.join(parts)}"
-        
-        # Schema changes
+        line = (
+            f"{self.stream_name}: sampled {self.sampled_records} records"
+            f" | target has {self.target_count} records"
+        )
+
         if self.schema_changes:
             line += "\n  Schema changes:"
             for change in self.schema_changes:
                 line += f"\n  {change}"
-        
+
         return line
 
 
 @dataclass
 class PreviewResult:
     """Complete preview result for all streams."""
-    
+
     streams: List[StreamPreview] = field(default_factory=list)
-    total_source_records: int = 0
-    total_new_records: int = 0
-    total_modified_records: int = 0
-    total_deleted_records: int = 0
+    total_sampled_records: int = 0
+    total_target_records: int = 0
     has_schema_changes: bool = False
-    
+
     def __str__(self) -> str:
         lines = ["=" * 60, "Sync Preview", "=" * 60, ""]
-        
+
         for stream in self.streams:
             lines.append(str(stream))
-        
+
         lines.append("")
         lines.append("-" * 60)
         lines.append(
-            f"Total: {self.total_source_records} records "
-            f"(+{self.total_new_records} new, "
-            f"~{self.total_modified_records} modified, "
-            f"-{self.total_deleted_records} deleted)"
+            f"Total: sampled {self.total_sampled_records} records "
+            f"across {len(self.streams)} streams "
+            f"| target has {self.total_target_records} records"
         )
-        
+
         if self.has_schema_changes:
-            lines.append("⚠️  Schema changes detected")
-        
+            lines.append("Schema changes detected")
+
         lines.append("=" * 60)
-        
+
         return "\n".join(lines)
 
 
 class PreviewEngine:
     """
     Generates previews of sync operations.
-    
-    Compares source data (sampled) with existing target tables to show:
+
+    Samples source data and compares it with existing target tables to show:
     - Target record counts
-    - Schema changes (inferred from samples)
+    - Schema changes inferred from samples
     - Sample records
     """
-    
+
     def __init__(self, catalog: str, schema: str):
-        """
-        Initialize the preview engine.
-        
-        Args:
-            catalog: Unity Catalog name
-            schema: Target schema name
-        """
         self.catalog = catalog
         self.schema = schema
         self._spark = None
-    
+
     @property
     def spark(self):
         """Get or create Spark session."""
         if self._spark is None:
             try:
                 from pyspark.sql import SparkSession
+
                 self._spark = SparkSession.builder.getOrCreate()
             except ImportError:
                 return None
         return self._spark
-    
+
     def get_table_name(self, stream_name: str) -> str:
-        """Get fully qualified table name."""
-        return f"{self.catalog}.{self.schema}.{stream_name}"
-    
+        """Get fully qualified table name using sanitized stream name."""
+        from brickbyte._sanitize import sanitize_stream_name
+
+        sanitized = sanitize_stream_name(stream_name)
+        return f"`{self.catalog}`.`{self.schema}`.`{sanitized}`"
+
     def table_exists(self, stream_name: str) -> bool:
         """Check if target table exists."""
         if not self.spark:
             return False
-        
+
         table_name = self.get_table_name(stream_name)
         return self.spark.catalog.tableExists(table_name)
-    
+
     def get_target_count(self, stream_name: str) -> int:
         """Get record count from target table."""
         if not self.table_exists(stream_name):
             return 0
-        
+
         table_name = self.get_table_name(stream_name)
         return self.spark.table(table_name).count()
-    
+
     def get_target_schema(self, stream_name: str) -> Dict[str, str]:
-        """Get schema of target table."""
+        """Get schema of target table.
+
+        Returns type names stripped of trailing ``()`` so that
+        ``StringType()`` becomes ``StringType``, matching the values
+        produced by ``_PYTHON_TO_SPARK``.
+        """
         if not self.table_exists(stream_name):
             return {}
-        
+
         table_name = self.get_table_name(stream_name)
         df = self.spark.table(table_name)
-        return {f.name: str(f.dataType) for f in df.schema.fields}
-    
+        schema = {}
+        for f in df.schema.fields:
+            type_str = str(f.dataType)
+            # Spark str() on simple types yields e.g. "StringType()" —
+            # strip the trailing "()" for consistent comparison.
+            if type_str.endswith("()"):
+                type_str = type_str[:-2]
+            schema[f.name] = type_str
+        return schema
+
     def get_source_schema(self, sample_records: List[dict]) -> Dict[str, str]:
         """Infer schema from sample records."""
         if not sample_records:
             return {}
-        
-        # Simple inference from first record
-        # In a real scenario, we might want to check Airbyte catalog
+
         record = sample_records[0]
         return {k: type(v).__name__ for k, v in record.items()}
-    
+
     def compare_schemas(
         self,
         source_schema: Dict[str, str],
         target_schema: Dict[str, str],
     ) -> List[SchemaChange]:
-        """Compare source and target schemas."""
+        """Compare source and target schemas, including type changes."""
         changes = []
-        
+
         source_cols = set(source_schema.keys())
         target_cols = set(target_schema.keys())
-        
+
         # New columns
         for col in source_cols - target_cols:
-            changes.append(SchemaChange(
-                column=col,
-                change_type="added",
-                source_type=source_schema[col],
-            ))
-        
+            changes.append(
+                SchemaChange(
+                    column=col,
+                    change_type="added",
+                    source_type=source_schema[col],
+                )
+            )
+
         # Removed columns
         for col in target_cols - source_cols:
-            changes.append(SchemaChange(
-                column=col,
-                change_type="removed",
-                target_type=target_schema[col],
-            ))
-        
-        # Type changes - simplified
-        # Note: inferred source types (python types) vs target types (spark types)
-        # mismatch is expected, so we largely skip strict type comparison here
-        # unless we map them properly. For now, we omit type_changed to avoid noise.
-        
+            changes.append(
+                SchemaChange(
+                    column=col,
+                    change_type="removed",
+                    target_type=target_schema[col],
+                )
+            )
+
+        # Type changes (map Python types to Spark types for comparison)
+        for col in source_cols & target_cols:
+            source_type = source_schema[col]
+            target_type = target_schema[col]
+            mapped_source = _PYTHON_TO_SPARK.get(source_type, source_type)
+            if mapped_source != target_type and source_type != target_type:
+                changes.append(
+                    SchemaChange(
+                        column=col,
+                        change_type="type_changed",
+                        source_type=source_type,
+                        target_type=target_type,
+                    )
+                )
+
         return changes
-    
+
     def preview_stream(
         self,
         ab_source: Any,
@@ -213,63 +234,46 @@ class PreviewEngine:
     ) -> StreamPreview:
         """Generate preview for a single stream."""
         target_count = self.get_target_count(stream_name)
-        
-        # Get samples from stream
+
         sample_records = []
         try:
-             # We only peek at the first N records
             records_gen = ab_source.get_records(stream_name)
             for i, record in enumerate(records_gen):
                 if i >= sample_size:
                     break
                 sample_records.append(record)
-        except Exception:
-            pass
-            
+        except Exception as e:
+            logger.warning(f"Could not sample records for {stream_name}: {e}")
+
         # Compare schemas
         source_schema = self.get_source_schema(sample_records)
         target_schema = self.get_target_schema(stream_name)
         schema_changes = self.compare_schemas(source_schema, target_schema)
-        
+
         return StreamPreview(
             stream_name=stream_name,
-            source_count=-1, # Unknown in streaming
+            sampled_records=len(sample_records),
             target_count=target_count,
-            new_records=-1, # Unknown
-            modified_records=-1, # Unknown
-            deleted_records=-1, # Unknown
             schema_changes=schema_changes,
             sample_records=sample_records,
         )
-    
+
     def preview(
         self,
         ab_source: Any,
         streams: List[str],
         sample_size: int = 5,
     ) -> PreviewResult:
-        """
-        Generate preview for all streams.
-        
-        Args:
-            ab_source: Initialized Airbyte source
-            streams: List of stream names
-            sample_size: Number of sample records per stream
-        
-        Returns:
-            PreviewResult with all stream previews
-        """
+        """Generate preview for all streams."""
         result = PreviewResult()
-        
+
         for stream_name in streams:
-            stream_preview = self.preview_stream(
-                ab_source, stream_name, sample_size
-            )
+            stream_preview = self.preview_stream(ab_source, stream_name, sample_size)
             result.streams.append(stream_preview)
-            
-            # Totals are less relevant with unknown counts, but we act best effort
+            result.total_sampled_records += stream_preview.sampled_records
+            result.total_target_records += stream_preview.target_count
+
             if stream_preview.schema_changes:
                 result.has_schema_changes = True
-        
-        return result
 
+        return result

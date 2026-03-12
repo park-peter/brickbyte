@@ -4,14 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "brickbyte"
-version = "0.1.0"
+version = "0.1.0rc1"
 description = "Sync data from Airbyte sources to Databricks Unity Catalog with streaming architecture"
 authors = [
     { name="Sri Tikkireddy", email="sri.tikkireddy@databricks.com" },
     { name="Peter Park", email="peter.park@databricks.com" },
 ]
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.10,<3.13"
 keywords = ["databricks", "airbyte", "etl", "data-engineering", "unity-catalog", "delta-lake"]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -26,11 +26,12 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 dependencies = [
-  "virtualenv",
-  "databricks-sdk>=0.74.0",
-  "databricks-sql-connector>=4.2.2",
-  "airbyte>=0.34.0",
-  "pyarrow>=14.0.0",
+  "virtualenv==20.29.3",
+  "databricks-sdk==0.95.0",
+  "databricks-sql-connector==4.2.5",
+  "airbyte==0.38.0",
+  "pyarrow==21.0.0",
+  "pyyaml==6.0.3",
 ]
 
 [project.urls]
@@ -45,6 +46,9 @@ file = "LICENSE"
 dev = [
   "pytest",
   "ruff==0.6.4",
+]
+progress = [
+  "tqdm==4.67.3",
 ]
 local-spark = [
   "delta-spark>=3.2.0",
@@ -85,3 +89,5 @@ docstring-code-line-length = 88
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
+markers = ["integration: requires configured Databricks workspace"]
+addopts = "--strict-markers"
